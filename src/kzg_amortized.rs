@@ -2,7 +2,7 @@ use std::{marker::PhantomData, iter::Map, error::Error, fmt::Display};
 
 use ark_ec::{Group, pairing::Pairing};
 use ark_ff::{PrimeField, UniformRand};
-use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial};
+use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
 use rand::RngCore;
 
 use crate::data_structures::{VectorCommitment, VCUniversalParams};
@@ -99,16 +99,30 @@ impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
 
 impl<F: PrimeField> KZGPreparedData<F> {
     
-    /// Evaluate the prepared data polynomial at an `index` in [0,...,n]. This will translate it to
+    /// Evaluate the prepared data polynomial at an `index` in the range [0,...,n]. This will translate it to
     /// the corresponding root of unity raised to `index`
     fn evaluate_by_index(&self, index: usize) -> F {
         // TODO: Not fully-safe as we are ignoring error of F::from_str
         let eval_index = self.w.pow(&F::from_str(&index.to_string()).ok().unwrap().into_bigint());
         self.data.evaluate(&eval_index)
     }
+
+    fn coeffs(&self) -> &[F] {
+        self.data.coeffs()
+    }
 }
 
-struct KZGCommitment {}
+struct KZGCommitment<G: Group> {
+    commit: G
+}
+
+impl<G: Group> KZGCommitment<G> {
+    fn new(commit: G) -> Self {
+        Self {
+            commit
+        }
+    }
+}
 
 struct KZGProof<F: PrimeField, G: Group> {
     commit: G,
@@ -147,7 +161,7 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
 {
     type UniversalParams = KZGKey<E::G1>;
     type PreparedData = KZGPreparedData<E::ScalarField>;
-    type Commitment = KZGCommitment;
+    type Commitment = KZGCommitment<E::G1>;
     type Proof = KZGProof<E::ScalarField, E::G1>;
     type Error = KZGError;
 
@@ -163,7 +177,8 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
         key: &Self::UniversalParams,
         data: &Self::PreparedData,
     ) -> Result<Self::Commitment, Self::Error> {
-        todo!()
+        let commit = key.commit_g1(data.coeffs());
+        Ok(KZGCommitment::new(commit.0))
     }
 
     fn prove(
@@ -205,7 +220,6 @@ mod test {
     fn test_interpolation() {
         let data = gen_data(10);
         let prepared_data = KZGPreparedData::from_iter(data.to_vec());
-        println!("{:?}", prepared_data.data);
 
         for (i, d) in data.iter().enumerate() {
             assert_eq!(prepared_data.evaluate_by_index(i), d.clone());
