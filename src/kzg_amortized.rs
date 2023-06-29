@@ -1,8 +1,10 @@
+use core::num;
 use std::{marker::PhantomData, iter::Map, error::Error, fmt::Display};
 
 use ark_ec::{Group, pairing::Pairing};
 use ark_ff::{PrimeField, UniformRand};
 use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
+use nalgebra::{SMatrix, DMatrix, DVector};
 use rand::RngCore;
 
 use crate::data_structures::{VectorCommitment, VCUniversalParams};
@@ -79,7 +81,11 @@ struct KZGPreparedData<F: PrimeField> {
     w: F,
 
     /// The size of the data-set (not necessairly equal to n-th root of unity)
-    size: usize
+    size: usize,
+
+    /// The Toeplitz matrix of the coefficients of `data`. This matrix is used, along with the reference
+    /// string, to create a vector of proofs for *all* points in the evaluation domain.
+    matrix: DMatrix<F>
 }
 
 impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
@@ -88,17 +94,41 @@ impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
         let len = points.len();
         let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::<F>::new(points.len()).unwrap();
         let poly = Evaluations::from_vec_and_domain(points, domain).interpolate();
-        
+        let num_coeffs = poly.degree()+1;
         Self {
             data: poly,
             w: domain.group_gen(),
-            size: len
+            size: len,
+            //matrix: DMatrix::<F>::from_element(0, 0, F::zero())
+            //matrix: DMatrix::zeros(len, len)
+            matrix: DMatrix::from_element(num_coeffs, num_coeffs, F::zero())
         }
     }
 }
 
 impl<F: PrimeField> KZGPreparedData<F> {
-    
+    /// Prepare the Toeplitz matrix based on the coefficients of the data polynomial.
+    fn toeplitz_matrix(&mut self) {
+        let coeffs = self.data.coeffs();
+        let n = coeffs.len();
+        let elements = DVector::from_row_slice(coeffs).transpose();
+
+        println!("Elements {}x{}", elements.nrows(), elements.ncols());
+        self.matrix.row_iter_mut().enumerate().for_each(|(i, mut row)| {
+            let new_row = elements.view((0,i), (1, n-i));
+            row.view_mut((0, i), (1, n-i)).copy_from(&new_row);
+        })
+        /*
+        for i in 0..coeffs.len() {
+            for j in 0..coeffs.len() {
+                if i >= j {
+                    self.matrix[(i, j)] = coeffs[i -j];
+                }
+            }
+        }
+        */
+    }
+
     /// Evaluate the prepared data polynomial at an `index` in the range [0,...,n]. This will translate it to
     /// the corresponding root of unity raised to `index`
     fn evaluate_by_index(&self, index: usize) -> F {
@@ -107,6 +137,7 @@ impl<F: PrimeField> KZGPreparedData<F> {
         self.data.evaluate(&eval_index)
     }
 
+    /// Return an array of the coefficients of this data's polynomial
     fn coeffs(&self) -> &[F] {
         self.data.coeffs()
     }
@@ -219,10 +250,12 @@ mod test {
     #[test]
     fn test_interpolation() {
         let data = gen_data(10);
-        let prepared_data = KZGPreparedData::from_iter(data.to_vec());
+        let mut prepared_data = KZGPreparedData::from_iter(data.to_vec());
 
         for (i, d) in data.iter().enumerate() {
             assert_eq!(prepared_data.evaluate_by_index(i), d.clone());
         }
+
+        prepared_data.toeplitz_matrix();
     }
 }
