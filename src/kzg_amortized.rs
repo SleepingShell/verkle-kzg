@@ -2,7 +2,7 @@ use core::num;
 use std::{marker::PhantomData, iter::Map, error::Error, fmt::Display};
 
 use ark_ec::{Group, pairing::Pairing};
-use ark_ff::{PrimeField, UniformRand};
+use ark_ff::{PrimeField, UniformRand, Zero, One};
 use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
 use nalgebra::{SMatrix, DMatrix, DVector};
 use rand::RngCore;
@@ -97,6 +97,7 @@ impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
         let num_coeffs = poly.degree()+1;
         Self {
             data: poly,
+            //TODO: Need to make sure this is a *primitive* root of unity aka every i < d, w^i != 0
             w: domain.group_gen(),
             size: len,
             //matrix: DMatrix::<F>::from_element(0, 0, F::zero())
@@ -236,6 +237,7 @@ mod test {
     use ark_bn254::{Bn254};
 
     type F = <Bn254 as Pairing>::ScalarField;
+    type G1 = <Bn254 as Pairing>::G1;
     type poly = DensePolynomial<<Bn254 as Pairing>::ScalarField>;
 
     fn gen_data(num: usize) -> Vec<F> {
@@ -257,5 +259,51 @@ mod test {
         }
 
         prepared_data.toeplitz_matrix();
+
+        let matrix = prepared_data.matrix.clone_owned();
+        let crs: KZGKey<<Bn254 as Pairing>::G1> = KZGKey::new_from_secret(F::from(10), 16);
+        let crs_vec = DVector::from_row_slice(&crs.ref_string_g1).transpose();
+
+        //let his = matrix * crs_vec;
+
+        //let mut to_dft: Vec<F> = his.into();
+    }
+
+    #[test]
+    fn test_blah() {
+        // https://docs.rs/ark-poly/0.4.2/ark_poly/domain/trait.EvaluationDomain.html#method.fft
+
+        let data = gen_data(2);
+        let prepared_data = KZGPreparedData::from_iter(data.to_vec());
+        let crs: KZGKey<<Bn254 as Pairing>::G1> = KZGKey::new_from_secret(F::from(2), 16);
+
+        let g1_zeros = vec![G1::zero(); 2];
+        let mut s_hat:Vec<G1> = crs.clone().ref_string_g1;
+        s_hat.reverse();
+        s_hat.extend(g1_zeros);
+
+        let f_zeros = vec![F::zero(); 2];
+        let mut c_hat: Vec<F> = prepared_data.coeffs().to_vec();
+        c_hat.reverse();
+        c_hat.extend(f_zeros);
+
+        let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::<F>::new(4).unwrap();
+        let y: Vec<G1> = domain.fft(&s_hat);
+        let v: Vec<F> = domain.fft(&c_hat);
+
+        let v_unity: F = domain.group_gen();
+        let mut t = v_unity.clone();
+        let mut vs: Vec<F> = vec![F::one()];
+        for i in 1..4 {
+            vs.push(t);
+            t *= t;
+        }
+
+        let y_vec = DVector::from_vec(y);
+        let v_vec = DVector::from_vec(v);
+        let vs_vec = DVector::from_vec(vs);
+
+        let u = y_vec.dot(&v_vec);
+
     }
 }
