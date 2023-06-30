@@ -280,7 +280,7 @@ mod test {
         let g1_zeros = vec![G1::zero(); 2];
         let mut s_hat:Vec<G1> = crs.clone().ref_string_g1;
         s_hat.reverse();
-        s_hat.extend(g1_zeros);
+        s_hat.extend(g1_zeros.to_owned());
 
         let f_zeros = vec![F::zero(); 2];
         let mut c_hat: Vec<F> = prepared_data.coeffs().to_vec();
@@ -299,11 +299,39 @@ mod test {
             t *= t;
         }
 
-        let y_vec = DVector::from_vec(y);
-        let v_vec = DVector::from_vec(v);
-        let vs_vec = DVector::from_vec(vs);
+        //let y_vec = DVector::from_vec(y);
+        //let v_vec = DVector::from_vec(v);
+        //let vs_vec = DVector::from_vec(vs);
 
-        let u = y_vec.dot(&v_vec);
+        //let u = y_vec.component_mul(&v_vec);
+        let mut u = elementwise_mul(&y, &v);
+        u = elementwise_mul(&u, &vs);
 
+        let mut h_hat: Vec<G1> = domain.ifft(&u);
+        println!("{:?}\n", h_hat);
+
+        h_hat.extend(g1_zeros); //TODO: We only need n-m zeros (m is the degree of poly, n is 2^x proofs generated)
+        let proofs = domain.fft(&h_hat);
+
+        println!("proofs {:?}", proofs);
+    }
+
+    /*
+    fn dot<G1: Group<ScalarField = F>, F: PrimeField>(v1: &Vec<G1>, v2: &Vec<F>) -> G1 {
+        let mut result = G1::zero();
+        for (i, &element) in v1.iter().enumerate() {
+            result += element*v2[i];
+        }
+
+        result
+    }
+    */
+    fn elementwise_mul<F: PrimeField, G1: Group<ScalarField = F>>(g_vec: &Vec<G1>, f_vec: &Vec<F>) -> Vec<G1> {
+        let mut result: Vec<G1> = vec![];
+        for (g, f) in g_vec.iter().zip(f_vec.iter()) {
+            result.push(*g * *f);
+        }
+
+        result
     }
 }
