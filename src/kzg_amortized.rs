@@ -290,23 +290,15 @@ impl<E: Pairing> KZGAmortized<E> {
         key: &KZGKey<E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>,
     ) -> Result<KZGBatchProof<E::ScalarField, E::G1>, KZGError> {
-        let compute_pi = | h: &[E::G1], point: E::ScalarField | {
-            let mut sum = E::G1::zero();
-            for (j, h_j) in h.iter().enumerate() {
-                sum += *h_j * point.pow(&[(j) as u64]);
-            }
-
-            sum
-        };
-
         let all_proofs = Self::build_witness_matrix(key, data)?;
-        
         let mut res = KZGBatchProof::default();
+
+        let domain = GeneralEvaluationDomain::<E::ScalarField>::new(data.degree()).unwrap();
+        let proofs = domain.fft(&all_proofs);
 
         for index in 0..data.size {
             let point = data.index_to_evaluation_point(index);
-            let commit = compute_pi(&all_proofs, point);
-            res.proofs.insert(index, (point, data.evaluate_by_index(index), commit));
+            res.proofs.insert(index, (point, data.evaluate_by_index(index), proofs[index]));
         }
 
         Ok(res)
@@ -366,16 +358,20 @@ impl<E: Pairing> KZGAmortized<E> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    extern crate test;
+    use test::Bencher;
     use ark_bn254::{Bn254};
-    use ark_ff::FftField;
 
     type F = <Bn254 as Pairing>::ScalarField;
     type G1 = <Bn254 as Pairing>::G1;
     type G2 = <Bn254 as Pairing>::G2;
     type poly = DensePolynomial<<Bn254 as Pairing>::ScalarField>;
     type KZG = KZGAmortized<Bn254>;
+
+    const DATA_SIZE: usize = 20;
+    const MAX_CRS: usize = 32;
 
     fn gen_data(num: usize) -> Vec<F> {
         let mut data: Vec<F> = vec![];
@@ -384,6 +380,14 @@ mod test {
             data.push(F::rand(&mut rng));
         }
         data
+    }
+
+    fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<G1,G2>) {
+        let data = gen_data(n);
+        let prep = KZGPreparedData::from_iter(data);
+        let crs = KZG::setup(max_degree, &mut rand::thread_rng()).unwrap();
+
+        (prep, crs)
     }
 
     #[test]
@@ -398,10 +402,7 @@ mod test {
 
     #[test]
     fn test_single_proof() {
-        let DATA_SIZE = 10;
-        let raw_data = gen_data(DATA_SIZE);
-        let data = KZGPreparedData::from_iter(raw_data.to_vec());
-        let crs = KZG::setup(32, &mut rand::thread_rng()).unwrap();
+        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
         let commit = KZG::commit(&crs, &data).unwrap();
 
         for i in 0..DATA_SIZE {
@@ -412,16 +413,28 @@ mod test {
 
     #[test]
     fn test_batch_proof() {
-        let DATA_SIZE = 10;
-
-        let raw_data = gen_data(DATA_SIZE);
-        let data = KZGPreparedData::from_iter(raw_data.to_vec());
-
-        let crs = KZG::setup(32, &mut rand::thread_rng()).unwrap();
+        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
         let commit = KZG::commit(&crs, &data).unwrap();
 
         let proofs = KZG::prove_all(&crs, &commit, &data).unwrap();
         assert!(KZG::verify_batch(&crs, &commit, &proofs).unwrap())
+    }
+
+
+    #[bench]
+    fn bench_single_proof(b: &mut Bencher) {
+        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
+        let commit = KZG::commit(&crs, &data).unwrap();
+        //let mut rng = rand::thread_rng();
+        b.iter(|| KZG::prove(&crs, &commit, 0, &data));
+    }
+
+    #[bench]
+    fn bench_multi_proof(b: &mut Bencher) {
+        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
+        let commit = KZG::commit(&crs, &data).unwrap();
+
+        b.iter(|| KZG::prove_all(&crs, &commit, &data));
     }
 
     fn vec_to_str<T: Display>(v: &Vec<T>) -> String {
