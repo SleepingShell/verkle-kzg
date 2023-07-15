@@ -9,7 +9,7 @@ use crate::data_structures::{VectorCommitment, VCUniversalParams};
 /// KZGKey represents the universal parameters, AKA reference string, for both
 /// committing polynomials and verifying commitments
 #[derive(Clone, Debug)]
-struct KZGKey<G1: Group, G2: Group> {
+pub struct KZGKey<G1: Group, G2: Group> {
     // The max degree this reference string supports
     degree: usize,
 
@@ -83,7 +83,7 @@ where
 /// KZGPreparedData will create a polynomial to commit to by interpolating the dataset.
 /// Instead of the evaluations occuring at [0,1,...,n-1] they instead occur at [0,w,w^2,...w^n-1].
 /// w is the n-th root of unity
-struct KZGPreparedData<F: PrimeField> {
+pub struct KZGPreparedData<F: PrimeField> {
     /// The polynomial representing the set of data this originated from
     data: DensePolynomial<F>,
 
@@ -136,7 +136,7 @@ impl<F: PrimeField> KZGPreparedData<F> {
     }
 }
 
-struct KZGCommitment<G: Group> {
+pub struct KZGCommitment<G: Group> {
     commit: G
 }
 
@@ -148,7 +148,7 @@ impl<G: Group> KZGCommitment<G> {
     }
 }
 
-struct KZGProof<F: PrimeField, G: Group> {
+pub struct KZGProof<F: PrimeField, G: Group> {
     commit: G,
 
     /// index is the position in the vector, NOT the evaluation point
@@ -161,7 +161,7 @@ struct KZGProof<F: PrimeField, G: Group> {
     data: F
 }
 
-struct KZGBatchProof<F: PrimeField, G:Group> {
+pub struct KZGBatchProof<F: PrimeField, G:Group> {
     //commit: G,
 
     // For now, there is no proof compression. This is a map of index -> (eval point, output, proof)
@@ -177,7 +177,7 @@ impl<F: PrimeField, G: Group> Default for KZGBatchProof<F, G> {
 }
 
 #[derive(Clone, Debug)]
-enum KZGError {
+pub enum KZGError {
     DefaultError,
     DataExceedsMaxSize,
     InvalidDomain
@@ -199,7 +199,7 @@ impl Error for KZGError {}
 
 /// Implementation of the Feist-Khovratovich technique of "Fast Amortized KZG proofs".
 /// 
-struct KZGAmortized<E: Pairing> {
+pub struct KZGAmortized<E: Pairing> {
     _engine: PhantomData<E>
 }
 
@@ -360,14 +360,11 @@ impl<E: Pairing> KZGAmortized<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate test;
-    use test::Bencher;
-    use ark_bn254::{Bn254};
-
+    use ark_bn254::Bn254;
+    
     type F = <Bn254 as Pairing>::ScalarField;
     type G1 = <Bn254 as Pairing>::G1;
     type G2 = <Bn254 as Pairing>::G2;
-    type poly = DensePolynomial<<Bn254 as Pairing>::ScalarField>;
     type KZG = KZGAmortized<Bn254>;
 
     const DATA_SIZE: usize = 20;
@@ -418,23 +415,6 @@ mod tests {
 
         let proofs = KZG::prove_all(&crs, &commit, &data).unwrap();
         assert!(KZG::verify_batch(&crs, &commit, &proofs).unwrap())
-    }
-
-
-    #[bench]
-    fn bench_single_proof(b: &mut Bencher) {
-        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
-        let commit = KZG::commit(&crs, &data).unwrap();
-        //let mut rng = rand::thread_rng();
-        b.iter(|| KZG::prove(&crs, &commit, 0, &data));
-    }
-
-    #[bench]
-    fn bench_multi_proof(b: &mut Bencher) {
-        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
-        let commit = KZG::commit(&crs, &data).unwrap();
-
-        b.iter(|| KZG::prove_all(&crs, &commit, &data));
     }
 
     fn vec_to_str<T: Display>(v: &Vec<T>) -> String {

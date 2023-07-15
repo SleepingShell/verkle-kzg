@@ -1,2 +1,3 @@
 mod data_structures;
-mod kzg_amortized;
+pub use data_structures::VectorCommitment;
+pub mod kzg_amortized;
