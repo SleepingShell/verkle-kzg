@@ -1,3 +1,4 @@
+use rand::Rng;
 use verkle_kzg::{kzg_amortized::*,VectorCommitment};
 
 use ark_ec::pairing::Pairing;
@@ -33,16 +34,13 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<G1,G2>) {
 fn bench_single_proof(c: &mut Criterion) {
   let (data, crs) = setup(DATA_SIZE, MAX_CRS);
   let commit = KZG::commit(&crs, &data).unwrap();
-  //let mut rng = rand::thread_rng();
-  //b.iter(|| KZG::prove(&crs, &commit, 0, &data));
-  c.bench_function("single proof", |b| b.iter(|| KZG::prove(&crs, &commit, 0, &data)));
+  let mut rng = rand::thread_rng();
+  c.bench_function("single proof", |b| b.iter(|| KZG::prove(&crs, &commit, rng.gen_range(0..DATA_SIZE), &data)));
 }
 
 fn bench_multi_proof(c: &mut Criterion) {
   let (data, crs) = setup(DATA_SIZE, MAX_CRS);
   let commit = KZG::commit(&crs, &data).unwrap();
-
-  //b.iter(|| KZG::prove_all(&crs, &commit, &data));
   c.bench_function("multi proof", |b| b.iter(|| KZG::prove_all(&crs, &commit, &data)));
 }
 
