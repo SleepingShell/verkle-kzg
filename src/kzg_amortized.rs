@@ -1,11 +1,8 @@
-use core::num;
-use std::{marker::PhantomData, iter::Map, error::Error, fmt::Display, collections::HashMap};
+use std::{marker::PhantomData, error::Error, fmt::Display, collections::HashMap};
 
 use ark_ec::{Group, pairing::Pairing};
-use ark_ff::{PrimeField, UniformRand, Zero, One, FftField, Field, BigInt};
+use ark_ff::{PrimeField, UniformRand, Zero, One, Field};
 use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
-use nalgebra::{SMatrix, DMatrix, DVector};
-use rand::RngCore;
 
 use crate::data_structures::{VectorCommitment, VCUniversalParams};
 
@@ -302,7 +299,7 @@ impl<E: Pairing> KZGAmortized<E> {
             sum
         };
 
-        let all_proofs = Self::build_proving_matrix(key, data)?;
+        let all_proofs = Self::build_witness_matrix(key, data)?;
         
         let mut res = KZGBatchProof::default();
 
@@ -316,7 +313,7 @@ impl<E: Pairing> KZGAmortized<E> {
     }
 
     /// Build the group elements from the FFT of the polynomial coefficients multiplied by the reference string
-    fn build_proving_matrix(
+    fn build_witness_matrix(
         key: &KZGKey<E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>
     ) -> Result<Vec<E::G1>, KZGError> {
