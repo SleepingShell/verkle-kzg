@@ -84,13 +84,16 @@ where
 /// Instead of the evaluations occuring at [0,1,...,n-1] they instead occur at [0,w,w^2,...w^n-1].
 /// w is the n-th root of unity
 pub struct KZGPreparedData<F: PrimeField> {
+    /// The vector of data
+    data: Vec<F>,
+
     /// The polynomial representing the set of data this originated from
-    data: DensePolynomial<F>,
+    poly: DensePolynomial<F>,
 
-    /// The n-th root of unity
-    w: F,
+    /// The domain of the evaluation form of the dataset,
+    domain: GeneralEvaluationDomain<F>,
 
-    /// The size of the data-set (not necessairly equal to n-th root of unity)
+    /// The size of the data-set (not necessairly equal to n)
     size: usize,
 }
 
@@ -99,12 +102,13 @@ impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
         let points: Vec<F> = iter.into_iter().collect();
         let len = points.len();
         let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::<F>::new(points.len()).unwrap();
-        let poly = Evaluations::from_vec_and_domain(points, domain).interpolate();
+        let poly = Evaluations::from_vec_and_domain(points.clone(), domain).interpolate();
         let num_coeffs = poly.degree()+1;
         Self {
-            data: poly,
+            data: points,
+            poly,
             //TODO: Need to make sure this is a *primitive* root of unity aka every i < d, w^i != 0
-            w: domain.group_gen(),
+            domain: domain,
             size: len,
         }
     }
@@ -114,25 +118,24 @@ impl<F: PrimeField> KZGPreparedData<F> {
     /// Evaluate the prepared data polynomial at an `index` in the range [0,...,n]. This will translate it to
     /// the corresponding root of unity raised to `index`
     fn evaluate_by_index(&self, index: usize) -> F {
-        // TODO: Not fully-safe as we are ignoring error of F::from_str
-        let eval_index = self.index_to_evaluation_point(index);
-        self.data.evaluate(&eval_index)
+        //let eval_index = self.index_to_evaluation_point(index);
+        //self.poly.evaluate(&eval_index)
+        self.data[index]
     }
 
     /// Return an array of the coefficients of this data's polynomial
     fn coeffs(&self) -> &[F] {
-        self.data.coeffs()
+        self.poly.coeffs()
     }
 
     /// Return polynomial degree size
     fn degree(&self) -> usize {
-        self.data.degree()
+        self.poly.degree()
     }
 
     /// Returns w^i
     fn index_to_evaluation_point(&self, index: usize) -> F {
-        // TODO: Look at Radix2EvaluationDomain.element()
-        self.w.pow(&F::from_str(&index.to_string()).ok().unwrap().into_bigint())
+        self.domain.element(index)
     }
 }
 
@@ -337,7 +340,7 @@ impl<E: Pairing> KZGAmortized<E> {
     ) -> Result<E::G1, KZGError> {
         let data_piece = data.evaluate_by_index(index);
         let point = data.index_to_evaluation_point(index);
-        let mut poly = data.data.clone();
+        let mut poly = data.poly.clone();
         poly -= &DensePolynomial::<E::ScalarField>::from_coefficients_slice(&[data_piece]);
 
         let divisor = DensePolynomial::<E::ScalarField>::from_coefficients_slice(&[E::ScalarField::zero() - point, E::ScalarField::one()]);
@@ -414,7 +417,7 @@ mod tests {
         let commit = KZG::commit(&crs, &data).unwrap();
 
         let proofs = KZG::prove_all(&crs, &commit, &data).unwrap();
-        assert!(KZG::verify_batch(&crs, &commit, &proofs).unwrap())
+        assert!(KZG::verify_batch(&crs, &commit, &proofs).unwrap());
     }
 
     fn vec_to_str<T: Display>(v: &Vec<T>) -> String {
