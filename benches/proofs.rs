@@ -31,6 +31,12 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<G1,G2>) {
     (prep, crs)
 }
 
+fn bench_data_commitment(c: &mut Criterion) {
+  let (data, crs) = setup(DATA_SIZE, MAX_CRS);
+
+  c.bench_function("commitment", |b| b.iter(|| KZG::commit(&crs, &data)));
+}
+
 fn bench_single_proof(c: &mut Criterion) {
   let (data, crs) = setup(DATA_SIZE, MAX_CRS);
   let commit = KZG::commit(&crs, &data).unwrap();
@@ -44,5 +50,5 @@ fn bench_multi_proof(c: &mut Criterion) {
   c.bench_function("multi proof", |b| b.iter(|| KZG::prove_all(&crs, &commit, &data)));
 }
 
-criterion_group!(proofs, bench_single_proof, bench_multi_proof);
+criterion_group!(proofs, bench_single_proof, bench_multi_proof, bench_data_commitment);
 criterion_main!(proofs);

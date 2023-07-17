@@ -17,7 +17,10 @@ pub struct KZGKey<G1: Group, G2: Group> {
     ref_string_g1: Vec<G1>,
 
     // Reference string in G2 group
-    ref_string_g2: Vec<G2>
+    ref_string_g2: Vec<G2>,
+
+    /// The lagrange polynomials are created and commited to.
+    lagrange_commitments: Vec<G1>
 }
 
 impl<F, G1, G2> KZGKey<G1, G2>
@@ -32,17 +35,21 @@ where
         let mut params: Self = Self {
             degree: max_degree,
             ref_string_g1: vec![],
-            ref_string_g2: vec![]
+            ref_string_g2: vec![],
+            lagrange_commitments: vec![] //TODO
         };
         params.ref_string_g1.push(g1);
         params.ref_string_g2.push(g2);
 
         let mut sec_cur: F = F::one();
-        for i in 1..max_degree {
+        for _i in 1..max_degree {
             sec_cur = sec_cur * secret; //α^i
             params.ref_string_g1.push(g1 * sec_cur);
             params.ref_string_g2.push(g2 * sec_cur);
         }
+
+        let domain = GeneralEvaluationDomain::<F>::new(max_degree).unwrap();
+        params.lagrange_commitments = domain.evaluate_all_lagrange_coefficients(secret).iter().map(|l| g1 * l).collect();
 
         params
     }
@@ -58,6 +65,15 @@ where
         }
 
         (sum, i)
+    }
+
+    fn commit_lagrange(&self, evaluations: &[F]) -> G1 {
+        let mut sum = G1::zero();
+        for (i, e) in evaluations.iter().enumerate() {
+            sum += self.lagrange_commitments[i] * e;
+        }
+
+        sum
     }
 
     fn element_at_g1(&self, index: usize) -> G1 {
@@ -85,12 +101,12 @@ where
 /// w is the n-th root of unity
 pub struct KZGPreparedData<F: PrimeField> {
     /// The vector of data
-    data: Vec<F>,
+    data: Vec<F>, //TODO: Instead store just an Evaluation::from_vec_and_domain ?
 
     /// The polynomial representing the set of data this originated from
     poly: DensePolynomial<F>,
 
-    /// The domain of the evaluation form of the dataset,
+    /// The evaluation domain of the dataset, aka the points that we will run polynomial evaluation at
     domain: GeneralEvaluationDomain<F>,
 
     /// The size of the data-set (not necessairly equal to n)
@@ -227,8 +243,7 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
         key: &Self::UniversalParams,
         data: &Self::PreparedData,
     ) -> Result<Self::Commitment, Self::Error> {
-        let commit = key.commit_g1(data.coeffs());
-        Ok(KZGCommitment::new(commit.0))
+        Ok( KZGCommitment { commit: key.commit_lagrange(&data.data) })
     }
 
     fn prove(
