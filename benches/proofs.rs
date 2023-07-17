@@ -3,7 +3,7 @@ use verkle_kzg::{kzg_amortized::*,VectorCommitment};
 
 use ark_ec::pairing::Pairing;
 use ark_ff::UniformRand;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main, BenchmarkId};
 use ark_bn254::Bn254;
 
 type F = <Bn254 as Pairing>::ScalarField;
@@ -31,6 +31,22 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1,G2>) 
     (prep, crs)
 }
 
+fn bench_setup(c: &mut Criterion) {
+  let base = 64;
+  let rng = &mut rand::thread_rng();
+
+  let mut group = c.benchmark_group("CRS setup");
+  group.sample_size(10);
+  for size in [base, base*64, base*512, base*2048].iter() {
+    group.throughput(criterion::Throughput::Elements(*size as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+      b.iter(|| KZG::setup(size, rng));
+    });
+  }
+
+  group.finish();
+}
+
 fn bench_data_commitment(c: &mut Criterion) {
   let (data, crs) = setup(DATA_SIZE, MAX_CRS);
 
@@ -50,5 +66,5 @@ fn bench_multi_proof(c: &mut Criterion) {
   c.bench_function("multi proof", |b| b.iter(|| KZG::prove_all(&crs, &commit, &data)));
 }
 
-criterion_group!(proofs, bench_single_proof, bench_multi_proof, bench_data_commitment);
+criterion_group!(proofs, bench_single_proof, bench_multi_proof, bench_data_commitment, bench_setup);
 criterion_main!(proofs);

@@ -23,7 +23,7 @@ pub struct KZGKey<F: PrimeField, G1: Group, G2: Group> {
     lagrange_commitments: Vec<G1>,
 
     /// domain.size / unity^i
-    unity_neg: Vec<F>,
+    //unity_neg: Vec<F>,
 
     domain: GeneralEvaluationDomain<F>
 }
@@ -38,25 +38,22 @@ where
         let g1 = G1::generator();
         let g2 = G2::generator();
         let domain = GeneralEvaluationDomain::<F>::new(max_degree).unwrap();
-        let d = domain.size_as_field_element();
-        let unity = domain.group_gen();
 
         let mut params: Self = Self {
             degree: max_degree,
             ref_string_g1: vec![],
             g2_secret: g2 * secret,
             lagrange_commitments: vec![], //TODO
-            unity_neg: vec![],
             domain: domain
         };
         params.ref_string_g1.push(g1);
         let mut sec_cur: F = F::one();
-        for i in 1..max_degree {
+        for _i in 1..max_degree {
             sec_cur = sec_cur * secret; //α^i
             params.ref_string_g1.push(g1 * sec_cur);
-            params.unity_neg.push(d / unity.pow(&[i as u64]));
         }
-        params.lagrange_commitments = domain.evaluate_all_lagrange_coefficients(secret).iter().map(|l| g1 * l).collect();
+        //params.lagrange_commitments = domain.evaluate_all_lagrange_coefficients(secret).iter().map(|l| g1 * l).collect();
+        params.lagrange_commitments = domain.ifft(&params.ref_string_g1);
 
         params
     }
@@ -325,8 +322,6 @@ impl<E: Pairing> KZGAmortized<E> {
         key: &KZGKey<E::ScalarField, E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>
     ) -> Result<Vec<E::G1>, KZGError> {
-        //let degree = data.degree();
-        //let coeffs = data.coeffs().to_vec();
         let degree = data.poly.degree();
         let coeffs = data.poly.coeffs();
         let domain = GeneralEvaluationDomain::<E::ScalarField>::new(degree*2).ok_or(KZGError::InvalidDomain)?;
