@@ -23,10 +23,10 @@ fn gen_data(num: usize) -> Vec<F> {
     data
 }
 
-fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<G1,G2>) {
+fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1,G2>) {
     let data = gen_data(n);
-    let prep = KZGPreparedData::from_iter(data);
     let crs = KZG::setup(max_degree, &mut rand::thread_rng()).unwrap();
+    let prep = KZGPreparedData::from_points_and_domain(data, crs.domain());
 
     (prep, crs)
 }

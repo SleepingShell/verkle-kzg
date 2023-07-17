@@ -9,21 +9,26 @@ use crate::data_structures::{VectorCommitment, VCUniversalParams};
 /// KZGKey represents the universal parameters, AKA reference string, for both
 /// committing polynomials and verifying commitments
 #[derive(Clone, Debug)]
-pub struct KZGKey<G1: Group, G2: Group> {
-    // The max degree this reference string supports
+pub struct KZGKey<F: PrimeField, G1: Group, G2: Group> {
+    /// The max degree this reference string supports
     degree: usize,
 
-    // Reference string in G1 group
+    /// Reference string in G1 group
     ref_string_g1: Vec<G1>,
 
-    // Reference string in G2 group
-    ref_string_g2: Vec<G2>,
+    /// For G2, we only need α*g
+    g2_secret: G2,
 
     /// The lagrange polynomials are created and commited to.
-    lagrange_commitments: Vec<G1>
+    lagrange_commitments: Vec<G1>,
+
+    /// domain.size / unity^i
+    unity_neg: Vec<F>,
+
+    domain: GeneralEvaluationDomain<F>
 }
 
-impl<F, G1, G2> KZGKey<G1, G2>
+impl<F, G1, G2> KZGKey<F, G1, G2>
 where
     F: PrimeField,
     G1: Group<ScalarField = F>,
@@ -32,23 +37,25 @@ where
     fn new_from_secret(secret: F, max_degree: usize) -> Self {
         let g1 = G1::generator();
         let g2 = G2::generator();
+        let domain = GeneralEvaluationDomain::<F>::new(max_degree).unwrap();
+        let d = domain.size_as_field_element();
+        let unity = domain.group_gen();
+
         let mut params: Self = Self {
             degree: max_degree,
             ref_string_g1: vec![],
-            ref_string_g2: vec![],
-            lagrange_commitments: vec![] //TODO
+            g2_secret: g2 * secret,
+            lagrange_commitments: vec![], //TODO
+            unity_neg: vec![],
+            domain: domain
         };
         params.ref_string_g1.push(g1);
-        params.ref_string_g2.push(g2);
-
         let mut sec_cur: F = F::one();
-        for _i in 1..max_degree {
+        for i in 1..max_degree {
             sec_cur = sec_cur * secret; //α^i
             params.ref_string_g1.push(g1 * sec_cur);
-            params.ref_string_g2.push(g2 * sec_cur);
+            params.unity_neg.push(d / unity.pow(&[i as u64]));
         }
-
-        let domain = GeneralEvaluationDomain::<F>::new(max_degree).unwrap();
         params.lagrange_commitments = domain.evaluate_all_lagrange_coefficients(secret).iter().map(|l| g1 * l).collect();
 
         params
@@ -56,15 +63,13 @@ where
 
     /// Multiplies the array of coefficients with the reference string in G1
     /// and sums the group elements. 
-    fn commit_g1(&self, coeffs: &[F]) -> (G1, usize) {
+    fn commit_g1(&self, coeffs: &[F]) -> G1 {
         let mut sum = G1::zero();
-        let mut i = 0;
-        for c in coeffs {
+        for (i, c) in coeffs.iter().enumerate() {
             sum += self.element_at_g1(i) * c;
-            i += 1;
         }
 
-        (sum, i)
+        sum
     }
 
     fn commit_lagrange(&self, evaluations: &[F]) -> G1 {
@@ -80,12 +85,17 @@ where
         self.ref_string_g1[index]
     }
 
-    fn element_at_g2(&self, index: usize) -> G2 {
-        self.ref_string_g2[index]
+    /// We only care about the α*g element in G2
+    fn get_g2(&self) -> G2 {
+        self.g2_secret
+    }
+
+    pub fn domain(&self) -> GeneralEvaluationDomain<F> {
+        self.domain
     }
 }
 
-impl<F, G1, G2> VCUniversalParams for KZGKey<G1, G2>
+impl<F, G1, G2> VCUniversalParams for KZGKey<F, G1, G2>
 where
     F: PrimeField,
     G1: Group<ScalarField = F>,
@@ -100,58 +110,44 @@ where
 /// Instead of the evaluations occuring at [0,1,...,n-1] they instead occur at [0,w,w^2,...w^n-1].
 /// w is the n-th root of unity
 pub struct KZGPreparedData<F: PrimeField> {
-    /// The vector of data
-    data: Vec<F>, //TODO: Instead store just an Evaluation::from_vec_and_domain ?
-
-    /// The polynomial representing the set of data this originated from
-    poly: DensePolynomial<F>,
-
     /// The evaluation domain of the dataset, aka the points that we will run polynomial evaluation at
-    domain: GeneralEvaluationDomain<F>,
+    evaluations: Evaluations<F, GeneralEvaluationDomain<F>>,
+
+    /// TODO: Remove
+    poly: DensePolynomial<F>,
 
     /// The size of the data-set (not necessairly equal to n)
     size: usize,
 }
 
-impl<F: PrimeField> FromIterator<F> for KZGPreparedData<F> {
-    fn from_iter<T: IntoIterator<Item = F>>(iter: T) -> Self {
-        let points: Vec<F> = iter.into_iter().collect();
+impl<F: PrimeField> KZGPreparedData<F> {
+    pub fn from_points_and_domain(points: Vec<F>, domain: GeneralEvaluationDomain<F>) -> Self {
         let len = points.len();
-        let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::<F>::new(points.len()).unwrap();
-        let poly = Evaluations::from_vec_and_domain(points.clone(), domain).interpolate();
-        let num_coeffs = poly.degree()+1;
+        let evals = Evaluations::from_vec_and_domain(points, domain);
+        let poly = evals.interpolate_by_ref();
+
         Self {
-            data: points,
-            poly,
-            //TODO: Need to make sure this is a *primitive* root of unity aka every i < d, w^i != 0
-            domain: domain,
+            evaluations: evals,
+            poly: poly,
             size: len,
         }
     }
-}
-
-impl<F: PrimeField> KZGPreparedData<F> {
+    fn domain_size(&self) -> usize {
+        self.evaluations.domain().size()
+    }
     /// Evaluate the prepared data polynomial at an `index` in the range [0,...,n]. This will translate it to
-    /// the corresponding root of unity raised to `index`
+    /// the corres`ponding root of unity raised to `index`
     fn evaluate_by_index(&self, index: usize) -> F {
-        //let eval_index = self.index_to_evaluation_point(index);
-        //self.poly.evaluate(&eval_index)
-        self.data[index]
-    }
-
-    /// Return an array of the coefficients of this data's polynomial
-    fn coeffs(&self) -> &[F] {
-        self.poly.coeffs()
-    }
-
-    /// Return polynomial degree size
-    fn degree(&self) -> usize {
-        self.poly.degree()
+       self.evaluations[index]
     }
 
     /// Returns w^i
     fn index_to_evaluation_point(&self, index: usize) -> F {
-        self.domain.element(index)
+        self.evaluations.domain().element(index)
+    }
+
+    fn poly(&self) -> DensePolynomial<F> {
+        self.evaluations.clone().interpolate()
     }
 }
 
@@ -224,7 +220,7 @@ pub struct KZGAmortized<E: Pairing> {
 
 impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
 {
-    type UniversalParams = KZGKey<E::G1, E::G2>;
+    type UniversalParams = KZGKey<E::ScalarField, E::G1, E::G2>;
     type PreparedData = KZGPreparedData<E::ScalarField>;
     type Commitment = KZGCommitment<E::G1>;
     type Proof = KZGProof<E::ScalarField, E::G1>;
@@ -243,7 +239,7 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
         key: &Self::UniversalParams,
         data: &Self::PreparedData,
     ) -> Result<Self::Commitment, Self::Error> {
-        Ok( KZGCommitment { commit: key.commit_lagrange(&data.data) })
+        Ok( KZGCommitment { commit: key.commit_lagrange(&data.evaluations.evals) })
     }
 
     fn prove(
@@ -277,7 +273,7 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
         proof: &Self::Proof
     ) -> Result<bool, Self::Error> {
         // TODO: Need to be able to access domain's root of unity to be able to evaluate properly
-        let pairing1 = E::pairing(proof.commit, key.element_at_g2(1) - (E::G2::generator() * proof.point));
+        let pairing1 = E::pairing(proof.commit, key.get_g2() - (E::G2::generator() * proof.point));
         let pairing2 = E::pairing(commitment.commit - E::G1::generator()*proof.data, E::G2::generator());
         
         Ok ( pairing1 == pairing2 )
@@ -288,7 +284,7 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
         commitment: &Self::Commitment,
         proof: &Self::BatchProof
     ) -> Result<bool, Self::Error> {
-        let s = key.element_at_g2(1);
+        let s = key.get_g2();
         for (index, p) in proof.proofs.iter() {
             let pairing1 = E::pairing(p.2, s - (E::G2::generator() * p.0));
             let pairing2 = E::pairing(commitment.commit - E::G1::generator() * p.1, E::G2::generator());
@@ -305,13 +301,14 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
 impl<E: Pairing> KZGAmortized<E> {
     /// Get all the proofs for every coefficient of `data`'s polynomial representation
     fn get_all_proofs(
-        key: &KZGKey<E::G1, E::G2>,
+        key: &KZGKey<E::ScalarField, E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>,
     ) -> Result<KZGBatchProof<E::ScalarField, E::G1>, KZGError> {
+        
         let all_proofs = Self::build_witness_matrix(key, data)?;
         let mut res = KZGBatchProof::default();
 
-        let domain = GeneralEvaluationDomain::<E::ScalarField>::new(data.degree()).unwrap();
+        let domain = data.evaluations.domain();
         let proofs = domain.fft(&all_proofs);
 
         for index in 0..data.size {
@@ -320,15 +317,18 @@ impl<E: Pairing> KZGAmortized<E> {
         }
 
         Ok(res)
+            
     }
 
     /// Build the group elements from the FFT of the polynomial coefficients multiplied by the reference string
     fn build_witness_matrix(
-        key: &KZGKey<E::G1, E::G2>,
+        key: &KZGKey<E::ScalarField, E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>
     ) -> Result<Vec<E::G1>, KZGError> {
-        let degree = data.degree();
-        let coeffs = data.coeffs().to_vec();
+        //let degree = data.degree();
+        //let coeffs = data.coeffs().to_vec();
+        let degree = data.poly.degree();
+        let coeffs = data.poly.coeffs();
         let domain = GeneralEvaluationDomain::<E::ScalarField>::new(degree*2).ok_or(KZGError::InvalidDomain)?;
         let domain_size = domain.size();
 
@@ -349,7 +349,7 @@ impl<E: Pairing> KZGAmortized<E> {
     }
 
     fn single_proof(
-        key: &KZGKey<E::G1, E::G2>,
+        key: &KZGKey<E::ScalarField, E::G1, E::G2>,
         data: &KZGPreparedData<E::ScalarField>,
         index: usize
     ) -> Result<E::G1, KZGError> {
@@ -362,7 +362,7 @@ impl<E: Pairing> KZGAmortized<E> {
         let q = &poly / &divisor;
         let commit = key.commit_g1(q.coeffs());
 
-        Ok( commit.0 )
+        Ok( commit )
     }
 
     fn elementwise_mul<F: PrimeField, G1: Group<ScalarField = F>>(g_vec: &Vec<G1>, f_vec: &Vec<F>) -> Vec<G1> {
@@ -385,7 +385,7 @@ mod tests {
     type G2 = <Bn254 as Pairing>::G2;
     type KZG = KZGAmortized<Bn254>;
 
-    const DATA_SIZE: usize = 20;
+    const DATA_SIZE: usize = 10;
     const MAX_CRS: usize = 32;
 
     fn gen_data(num: usize) -> Vec<F> {
@@ -397,22 +397,13 @@ mod tests {
         data
     }
 
-    fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<G1,G2>) {
+    fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F,G1,G2>) {
         let data = gen_data(n);
-        let prep = KZGPreparedData::from_iter(data);
+        //let prep = KZGPreparedData::from_iter(data);
         let crs = KZG::setup(max_degree, &mut rand::thread_rng()).unwrap();
+        let prep = KZGPreparedData::from_points_and_domain(data, crs.domain);
 
         (prep, crs)
-    }
-
-    #[test]
-    fn test_interpolation() {
-        let data = gen_data(10);
-        let mut prepared_data = KZGPreparedData::from_iter(data.to_vec());
-
-        for (i, d) in data.iter().enumerate() {
-            assert_eq!(prepared_data.evaluate_by_index(i), d.clone());
-        }
     }
 
     #[test]
