@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_insert_get_leaves() {
-        let NUM_LEAVES = 20;
+        let NUM_LEAVES = 50;
         let KEY_LEN = 3;
         let ARITY=10;
 
@@ -375,37 +375,51 @@ mod tests {
 
         // 1/4 of keys will share a stem
         let stem = random_key(KEY_LEN-1, ARITY, None);
-        let mut kvs: Vec<(K, N)> = (0..NUM_LEAVES/4).map(|_| {
+        let mut kvs: HashMap<K, N> = (0..NUM_LEAVES/4).map(|_| {
             let key = random_key(KEY_LEN, ARITY, Some(&stem));
 
             (key.clone(), random_leaf(key))
         }).collect();
 
-        kvs.extend( (0..NUM_LEAVES-kvs.len()).map(|_| {
+        while kvs.len() < NUM_LEAVES {
             let key = random_key(KEY_LEN, ARITY, None);
-            (key.clone(), random_leaf(key))
-        }).collect::<Vec<(K,N)>>() );
-
-        let mut kvs_random = kvs.clone();
-        let kvs_checker = kvs.clone();
-        kvs_random.shuffle(&mut rand::thread_rng());
-
-        
-        for (kv1, kv2) in kvs.into_iter().zip(kvs_random.into_iter()) {
-            root1.insert(kv1.0.to_action(), kv1.1);
-            root2.insert(kv2.0.to_action(), kv2.1);
+            kvs.insert(key.clone(), random_leaf(key));
         }
 
-        println!("{:?}\n=========\n{:?}", root1, root2);
+        let keys: Vec<&K> = kvs.keys().collect();
+        let mut keys2 = keys.clone();
+        keys2.shuffle(&mut rand::thread_rng());
+
+        
+        for (k1, k2) in keys.iter().zip(keys2.iter()) {
+            let l1 = kvs.get(k1.clone()).unwrap();
+            let l2 = kvs.get(k2.clone()).unwrap();
+            root1.insert(k1.to_action(), l1.clone());
+            root2.insert(k2.to_action(), l2.clone());
+        }
 
         assert!(root1 == root2);
 
-        for k in kvs_checker {
-            let get1 = root1.get(k.0.to_action());
-            let get2 = root2.get(k.0.to_action());
+        for k in keys {
+            let get1 = root1.get(k.to_action());
+            let get2 = root2.get(k.to_action());
 
             assert!(get1 == get2);
-            assert!(*get1.unwrap() == k.1);
+            assert!(*get1.unwrap() == *kvs.get(k).unwrap());
         }
+    }
+
+    #[test]
+    fn test_overwrite() {
+        let mut root = N::new_internal(vec![]);
+
+        let key = random_key(3, 10, None);
+        let val1 = random_leaf(key.clone());
+        let val2 = random_leaf(key.clone());
+
+        root.insert(key.to_action(), val1);
+        root.insert(key.to_action(), val2.clone());
+
+        assert!(*root.get(key.to_action()).unwrap() == val2 );
     }
 }
