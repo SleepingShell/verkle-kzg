@@ -17,11 +17,7 @@ pub trait VCUniversalParams {
 /// A vector commitment schemes allows committing to a vector of data over a Finite Field,
 /// and generating proofs of inclusion.
 /// TODO: This should be a separate module
-pub trait VectorCommitment<F>
-where
-    F: PrimeField,
-    //P: DenseUVPolynomial<F, Point = F>,
-{
+pub trait VectorCommitment {
     /// The universal parameters for the vector commitment scheme.
     /// CURRENTLY this API does not support differing committing, proving and verifying keys
     type UniversalParams: VCUniversalParams;

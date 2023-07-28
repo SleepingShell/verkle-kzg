@@ -16,3 +16,6 @@ criterion = "0.5"
 [[bench]]
 name = "proofs"
 harness = false
+
+[profile.release]
+debug = true
