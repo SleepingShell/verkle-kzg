@@ -1,15 +1,17 @@
 use std::{
-    collections::HashMap,
     collections::hash_map::Entry,
+    collections::HashMap,
+    fmt::Write,
+    hash::Hash,
     marker::PhantomData,
-    ops::{Index, IndexMut, Deref}, hash::Hash, fmt::Write,
+    ops::{Deref, Index, IndexMut},
 };
 
 use crate::VectorCommitment;
 
 trait Key: Eq + Sized {
     type Unit: Hash + Eq + Clone;
-    type Action: ActionKey<Self, Unit=Self::Unit>;
+    type Action: ActionKey<Self, Unit = Self::Unit>;
 
     fn to_action(&self) -> Self::Action;
 }
@@ -58,25 +60,35 @@ trait Leaf<K: Key, C>: Sized {
 }
 
 #[derive(Clone, PartialEq)]
-enum Node<K, C, L>
-where
-    K: Key
-{
-    Internal{
-        key: K,
-        commit: Option<C>,
-        children: HashMap<K::Unit, Node<K,C,L>>
-    },
-    Leaf(L)
-}
-
-impl<K,C,L> Node<K,C,L>
+enum Node<K, C, L, VC>
 where
     K: Key,
-    L: Leaf<K, C> + Clone
+    VC: VectorCommitment + Clone,
+{
+    Internal {
+        key: K,
+        commit: Option<C>,
+        vc_data: Option<VC::PreparedData>,
+        is_dirty: bool,
+        children: HashMap<K::Unit, Node<K, C, L, VC>>,
+    },
+    Leaf(L),
+}
+
+impl<K, C, L, VC> Node<K, C, L, VC>
+where
+    K: Key,
+    L: Leaf<K, C> + Clone,
+    VC: VectorCommitment + Clone,
 {
     fn new_internal(key: K) -> Self {
-        Self::Internal { key, commit: None, children: HashMap::new() }
+        Self::Internal {
+            key,
+            commit: None,
+            vc_data: None,
+            is_dirty: true,
+            children: HashMap::new(),
+        }
     }
 
     fn new_leaf(l: L) -> Self {
@@ -86,31 +98,34 @@ where
     fn key(&self) -> &K {
         match self {
             Self::Internal { key, .. } => key,
-            Self::Leaf(leaf) => leaf.key()
+            Self::Leaf(leaf) => leaf.key(),
         }
     }
 
-    fn insert(&mut self, mut q_key: K::Action, node: Self) ->Option<Self> {
+    fn insert(&mut self, mut q_key: K::Action, node: Self) -> Option<Self> {
         match self {
-            Self::Internal { children, .. } => {
+            Self::Internal {
+                children, is_dirty, ..
+            } => {
+                *is_dirty = true;
                 let child = children.entry(q_key.current_unit().clone());
                 match child {
-                    Entry::Occupied(mut o) => {                        
+                    Entry::Occupied(mut o) => {
                         if q_key.units_left() == 1 {
-                            Some ( o.insert(node) )
+                            Some(o.insert(node))
                         } else {
                             //o.get_mut().insert(q_key, node)
                             let c = o.get_mut();
                             match c {
-                                Self::Internal{ .. } => {
+                                Self::Internal { .. } => {
                                     q_key.strip();
                                     c.insert(q_key, node)
-                                },
+                                }
                                 Self::Leaf(l) => {
                                     let mut l_key = l.key().to_action();
 
                                     if q_key.full_key() == l_key.full_key() {
-                                        return Some( o.insert(node) )
+                                        return Some(o.insert(node));
                                     }
 
                                     q_key.strip();
@@ -126,13 +141,13 @@ where
                                 }
                             }
                         }
-                    },
+                    }
                     Entry::Vacant(v) => {
                         v.insert(node);
                         None
                     }
                 }
-            },
+            }
 
             Self::Leaf(l) => {
                 // TODO: Make decision on if leaves will always be pure leaves, or if this is how extension
@@ -144,45 +159,89 @@ where
 
     fn get(&self, mut q_key: K::Action) -> Option<&Self> {
         match self {
-            Self::Internal { key, commit, children } => {
+            Self::Internal {
+                key,
+                commit,
+                children,
+                ..
+            } => {
                 let child = children.get(q_key.current_unit())?;
 
                 if q_key.units_left() == 1 {
-                    return Some( child )
+                    return Some(child);
                 }
 
                 match child {
-                    Self::Internal{ .. } => {
+                    Self::Internal { .. } => {
                         q_key.strip();
                         child.get(q_key)
                     }
                     Self::Leaf(l) => {
                         if *l.key() == q_key.full_key() {
-                            Some (child)
+                            Some(child)
                         } else {
                             None
                         }
                     }
                 }
-            },
+            }
 
             Self::Leaf(l) => {
                 panic!("Should not reach here")
             }
         }
     }
+
+    /// Generate the commitment of this node by recursively updating children that need to update their
+    /// commitment
+    /// Sets dirty to false
+    ///
+    fn gen_commitment(&mut self) -> C {
+        match self {
+            Self::Internal {
+                key,
+                commit,
+                is_dirty,
+                vc_data,
+                children,
+            } => {
+                if commit.is_none() || *is_dirty {
+                    let child_commits: Vec<(&K::Unit, C)> = children
+                        .iter_mut()
+                        .map(|(k, v)| (k, v.gen_commitment()))
+                        .collect();
+
+                    // If this is the first time initializing our VC data
+                    if vc_data.is_none() {
+                        for commit in child_commits {
+                            
+                        }
+                    }
+                } else {
+                    commit.unwrap()
+                }
+            }
+            Self::Leaf(l) => l.commitment().to_owned(),
+        }
+    }
 }
 
-impl<K,C,L> core::fmt::Debug for Node<K,C,L>
+impl<K, C, L, VC> core::fmt::Debug for Node<K, C, L, VC>
 where
     C: core::fmt::Debug,
     K: Key + core::fmt::Debug,
     K::Unit: core::fmt::Debug,
-    L: core::fmt::Debug
+    L: core::fmt::Debug,
+    VC: VectorCommitment + Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Internal { key, commit, children } => {
+            Self::Internal {
+                key,
+                commit,
+                children,
+                ..
+            } => {
                 f.write_fmt(format_args!("Internal ({:?}) {{\n", key))?;
                 f.write_fmt(format_args!("  Commit: {:?}\n", commit))?;
                 if children.is_empty() {
@@ -195,7 +254,7 @@ where
                 }
 
                 f.write_str("  }\n")?;
-            },
+            }
             Self::Leaf(l) => {
                 f.write_fmt(format_args!("{:?}", l))?;
             }
@@ -209,28 +268,30 @@ where
 struct VanillaLeaf<K, C, T> {
     key: K,
     value: T,
-    commit: C
+    commit: C,
 }
 
-impl<K,C,T> VanillaLeaf<K,C,T>
+impl<K, C, T> VanillaLeaf<K, C, T>
 where
-    C: Default
+    C: Default,
 {
     fn hash() -> C {
         C::default()
     }
 }
 
-impl<K,C,T> Leaf<K,C> for VanillaLeaf<K,C,T>
+impl<K, C, T> Leaf<K, C> for VanillaLeaf<K, C, T>
 where
     K: Key,
-    C: Default
+    C: Default,
 {
     type Value = T;
 
     fn new(key: K, value: Self::Value) -> Self {
         Self {
-            key, value, commit: Self::hash()
+            key,
+            value,
+            commit: Self::hash(),
         }
     }
 
@@ -249,7 +310,7 @@ where
 
 impl<U> Key for Vec<U>
 where
-    U: Hash + Clone + Eq
+    U: Hash + Clone + Eq,
 {
     type Unit = U;
     type Action = AKey<Self>;
@@ -275,21 +336,21 @@ where
 
 struct AKey<K> {
     full_key: K,
-    cur_index: usize
+    cur_index: usize,
 }
 
 impl<K> AKey<K> {
     fn new(key: K) -> Self {
         Self {
             full_key: key,
-            cur_index: 0
+            cur_index: 0,
         }
     }
 }
 
 impl<U> ActionKey<Vec<U>> for AKey<Vec<U>>
 where
-    U: Clone
+    U: Clone,
 {
     type Unit = U;
 
@@ -328,9 +389,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, seq::SliceRandom};
+    use rand::{seq::SliceRandom, Rng};
 
     use super::*;
+    use crate::kzg_amortized::KZGAmortized;
+    use ark_bn254::Bn254;
 
     #[derive(Clone, Debug, PartialEq)]
     struct Commit {}
@@ -342,7 +405,7 @@ mod tests {
 
     type K = Vec<usize>;
     type LeafT = VanillaLeaf<K, Commit, usize>;
-    type N = Node<K, Commit, LeafT>;
+    type N = Node<K, Commit, LeafT, KZGAmortized<Bn254>>;
 
     fn random_leaf(key: K) -> N {
         let val: usize = rand::random();
@@ -368,18 +431,20 @@ mod tests {
     fn test_insert_get_leaves() {
         let NUM_LEAVES = 50;
         let KEY_LEN = 3;
-        let ARITY=10;
+        let ARITY = 10;
 
         let mut root1 = N::new_internal(vec![]);
         let mut root2 = N::new_internal(vec![]);
 
         // 1/4 of keys will share a stem
-        let stem = random_key(KEY_LEN-1, ARITY, None);
-        let mut kvs: HashMap<K, N> = (0..NUM_LEAVES/4).map(|_| {
-            let key = random_key(KEY_LEN, ARITY, Some(&stem));
+        let stem = random_key(KEY_LEN - 1, ARITY, None);
+        let mut kvs: HashMap<K, N> = (0..NUM_LEAVES / 4)
+            .map(|_| {
+                let key = random_key(KEY_LEN, ARITY, Some(&stem));
 
-            (key.clone(), random_leaf(key))
-        }).collect();
+                (key.clone(), random_leaf(key))
+            })
+            .collect();
 
         while kvs.len() < NUM_LEAVES {
             let key = random_key(KEY_LEN, ARITY, None);
@@ -390,7 +455,6 @@ mod tests {
         let mut keys2 = keys.clone();
         keys2.shuffle(&mut rand::thread_rng());
 
-        
         for (k1, k2) in keys.iter().zip(keys2.iter()) {
             let l1 = kvs.get(k1.clone()).unwrap();
             let l2 = kvs.get(k2.clone()).unwrap();
@@ -420,6 +484,6 @@ mod tests {
         root.insert(key.to_action(), val1);
         root.insert(key.to_action(), val2.clone());
 
-        assert!(*root.get(key.to_action()).unwrap() == val2 );
+        assert!(*root.get(key.to_action()).unwrap() == val2);
     }
 }
