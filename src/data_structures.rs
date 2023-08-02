@@ -8,11 +8,12 @@ pub trait VCUniversalParams {
     fn max_size(&self) -> usize;
 }
 
-//pub trait VCPreparedData<F>: Iterator {
-    // The data to work with the Vector Commitment may need pre-processing. Prepare the data
-    // and copy it to this structure.
-    //fn prepare(data: O) -> Self;
-//}
+pub trait VCPreparedData {
+    type Item;
+    type Error;
+
+    fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error>;
+}
 
 /// A vector commitment schemes allows committing to a vector of data over a Finite Field,
 /// and generating proofs of inclusion.
@@ -23,7 +24,7 @@ pub trait VectorCommitment {
     type UniversalParams: VCUniversalParams;
 
     /// The vector dataset that has gone through preparation to use with the Vector Commitment.
-    type PreparedData;
+    type PreparedData: VCPreparedData;
 
     /// The Commitment to a vector.
     type Commitment;

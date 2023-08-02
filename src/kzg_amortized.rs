@@ -4,7 +4,7 @@ use ark_ec::{Group, pairing::Pairing};
 use ark_ff::{PrimeField, UniformRand, Zero, One, Field};
 use ark_poly::{GeneralEvaluationDomain, EvaluationDomain, Evaluations, univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
 
-use crate::data_structures::{VectorCommitment, VCUniversalParams};
+use crate::data_structures::{VectorCommitment, VCUniversalParams, VCPreparedData};
 
 /// KZGKey represents the universal parameters, AKA reference string, for both
 /// committing polynomials and verifying commitments
@@ -90,6 +90,10 @@ where
     pub fn domain(&self) -> GeneralEvaluationDomain<F> {
         self.domain
     }
+
+    fn unity(&self) -> F {
+        self.domain.group_gen()
+    }
 }
 
 impl<F, G1, G2> VCUniversalParams for KZGKey<F, G1, G2>
@@ -118,8 +122,11 @@ pub struct KZGPreparedData<F: PrimeField> {
 }
 
 impl<F: PrimeField> KZGPreparedData<F> {
-    pub fn from_points_and_domain(points: Vec<F>, domain: GeneralEvaluationDomain<F>) -> Self {
+    pub fn from_points_and_domain(mut points: Vec<F>, domain: GeneralEvaluationDomain<F>) -> Self {
         let len = points.len();
+        if len < domain.size() {
+            points.resize(domain.size(), F::zero());
+        }
         let evals = Evaluations::from_vec_and_domain(points, domain);
         let poly = evals.interpolate_by_ref();
 
@@ -132,19 +139,32 @@ impl<F: PrimeField> KZGPreparedData<F> {
     fn domain_size(&self) -> usize {
         self.evaluations.domain().size()
     }
-    /// Evaluate the prepared data polynomial at an `index` in the range [0,...,n]. This will translate it to
-    /// the corres`ponding root of unity raised to `index`
-    fn evaluate_by_index(&self, index: usize) -> F {
+    
+    fn evaluate(&self, index: usize) -> F {
        self.evaluations[index]
     }
 
     /// Returns w^i
-    fn index_to_evaluation_point(&self, index: usize) -> F {
+    fn index_to_point(&self, index: usize) -> F {
         self.evaluations.domain().element(index)
     }
 
     fn poly(&self) -> DensePolynomial<F> {
         self.evaluations.clone().interpolate()
+    }
+}
+
+impl<F: PrimeField> VCPreparedData for KZGPreparedData<F> {
+    type Item = F;
+    type Error = KZGError;
+
+    fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
+        // TODO: Domain expansion, although in Verkle case the domain size is the arity of the tree.
+        if index > self.domain_size() {
+            return Err(KZGError::OutOfDomainBounds);
+        }
+        self.evaluations.evals[index] = value;
+        return Ok(())
     }
 }
 
@@ -192,7 +212,8 @@ impl<F: PrimeField, G: Group> Default for KZGBatchProof<F, G> {
 pub enum KZGError {
     DefaultError,
     DataExceedsMaxSize,
-    InvalidDomain
+    InvalidDomain,
+    OutOfDomainBounds
 }
 
 impl KZGError {
@@ -215,7 +236,7 @@ pub struct KZGAmortized<E: Pairing> {
     _engine: PhantomData<E>
 }
 
-impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
+impl<E: Pairing> VectorCommitment for KZGAmortized<E>
 {
     type UniversalParams = KZGKey<E::ScalarField, E::G1, E::G2>;
     type PreparedData = KZGPreparedData<E::ScalarField>;
@@ -250,8 +271,8 @@ impl<E: Pairing> VectorCommitment<E::ScalarField> for KZGAmortized<E>
             Self::Proof {
                 commit,
                 index,
-                data: data.evaluate_by_index(index),
-                point: data.index_to_evaluation_point(index)
+                data: data.evaluate(index),
+                point: data.index_to_point(index)
             }
         )
     }
@@ -309,8 +330,8 @@ impl<E: Pairing> KZGAmortized<E> {
         let proofs = domain.fft(&all_proofs);
 
         for index in 0..data.size {
-            let point = data.index_to_evaluation_point(index);
-            res.proofs.insert(index, (point, data.evaluate_by_index(index), proofs[index]));
+            let point = data.index_to_point(index);
+            res.proofs.insert(index, (point, data.evaluate(index), proofs[index]));
         }
 
         Ok(res)
@@ -348,13 +369,14 @@ impl<E: Pairing> KZGAmortized<E> {
         data: &KZGPreparedData<E::ScalarField>,
         index: usize
     ) -> Result<E::G1, KZGError> {
-        let data_piece = data.evaluate_by_index(index);
-        let point = data.index_to_evaluation_point(index);
+        let data_piece = data.evaluate(index);
+        let point = data.index_to_point(index);
         let mut poly = data.poly.clone();
         poly -= &DensePolynomial::<E::ScalarField>::from_coefficients_slice(&[data_piece]);
 
         let divisor = DensePolynomial::<E::ScalarField>::from_coefficients_slice(&[E::ScalarField::zero() - point, E::ScalarField::one()]);
         let q = &poly / &divisor;
+
         let commit = key.commit_g1(q.coeffs());
 
         Ok( commit )
@@ -380,7 +402,7 @@ mod tests {
     type G2 = <Bn254 as Pairing>::G2;
     type KZG = KZGAmortized<Bn254>;
 
-    const DATA_SIZE: usize = 10;
+    const DATA_SIZE: usize = 4;
     const MAX_CRS: usize = 32;
 
     fn gen_data(num: usize) -> Vec<F> {
@@ -410,6 +432,7 @@ mod tests {
             let proof = KZG::prove(&crs, &commit, i, &data).unwrap();
             assert!(KZG::verify(&crs, &commit, &proof).unwrap());
         }
+
     }
 
     #[test]
