@@ -158,6 +158,12 @@ impl<F: PrimeField> VCPreparedData for KZGPreparedData<F> {
     type Item = F;
     type Error = KZGError;
 
+    /// FIXIME: HACKY
+    fn from_vec(data: Vec<Self::Item>) -> Self {
+        let domain = GeneralEvaluationDomain::<F>::new(data.len()).unwrap();
+        Self::from_points_and_domain(data, domain)
+    }
+
     fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
         // TODO: Domain expansion, although in Verkle case the domain size is the arity of the tree.
         if index > self.domain_size() {
@@ -165,6 +171,10 @@ impl<F: PrimeField> VCPreparedData for KZGPreparedData<F> {
         }
         self.evaluations.evals[index] = value;
         return Ok(())
+    }
+
+    fn max_size(&self) -> usize {
+        self.domain_size()
     }
 }
 
@@ -313,6 +323,10 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E>
         }
 
         Ok( true )
+    }
+
+    fn convert_commitment_to_data(commit: &Self::Commitment) -> <Self::PreparedData as VCPreparedData>::Item {
+        todo!()
     }
 }
 

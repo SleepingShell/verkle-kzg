@@ -12,7 +12,12 @@ pub trait VCPreparedData {
     type Item;
     type Error;
 
+    fn from_vec(data: Vec<Self::Item>) -> Self;
+
     fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error>;
+
+    /// Return the max amount of data that can be stored in this data
+    fn max_size(&self) -> usize;
 }
 
 /// A vector commitment schemes allows committing to a vector of data over a Finite Field,
@@ -21,6 +26,7 @@ pub trait VCPreparedData {
 pub trait VectorCommitment {
     /// The universal parameters for the vector commitment scheme.
     /// CURRENTLY this API does not support differing committing, proving and verifying keys
+    /// TODO: Seprate keys^
     type UniversalParams: VCUniversalParams;
 
     /// The vector dataset that has gone through preparation to use with the Vector Commitment.
@@ -81,5 +87,8 @@ pub trait VectorCommitment {
         commitment: &Self::Commitment,
         proof: &Self::BatchProof
     ) -> Result<bool, Self::Error>;
+
+    /// Converts a commitment to `PreparedData::Item`
+    fn convert_commitment_to_data(commit: &Self::Commitment) -> <Self::PreparedData as VCPreparedData>::Item;
     
 }
