@@ -1,6 +1,6 @@
-use std::error::Error;
+use std::{error::Error, fmt::Debug};
 
-use ark_ff::{PrimeField};
+use ark_ff::{PrimeField, Zero};
 use rand::RngCore;
 
 pub trait VCUniversalParams {
@@ -9,8 +9,8 @@ pub trait VCUniversalParams {
 }
 
 pub trait VCPreparedData {
-    type Item;
-    type Error;
+    type Item: Clone + Zero;
+    type Error: Debug;
 
     fn from_vec(data: Vec<Self::Item>) -> Self;
 
@@ -33,7 +33,7 @@ pub trait VectorCommitment {
     type PreparedData: VCPreparedData;
 
     /// The Commitment to a vector.
-    type Commitment;
+    type Commitment: PartialEq;
 
     /// The proof for a single member of a vector.
     type Proof;
@@ -42,7 +42,7 @@ pub trait VectorCommitment {
     type BatchProof;
 
     /// The error type for the scheme.
-    type Error: Error;
+    type Error: Error + Debug;
 
     /// Constructs the Universal parameters for the scheme, which allows committing
     /// and proving inclusion of vectors up to `max_items` items

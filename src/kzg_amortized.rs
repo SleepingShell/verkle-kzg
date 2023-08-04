@@ -110,6 +110,7 @@ where
 /// KZGPreparedData will create a polynomial to commit to by interpolating the dataset.
 /// Instead of the evaluations occuring at [0,1,...,n-1] they instead occur at [0,w,w^2,...w^n-1].
 /// w is the n-th root of unity
+#[derive(Clone, PartialEq)]
 pub struct KZGPreparedData<F: PrimeField> {
     /// The evaluation domain of the dataset, aka the points that we will run polynomial evaluation at
     evaluations: Evaluations<F, GeneralEvaluationDomain<F>>,
@@ -178,6 +179,7 @@ impl<F: PrimeField> VCPreparedData for KZGPreparedData<F> {
     }
 }
 
+#[derive(PartialEq, Clone, Default, Debug)]
 pub struct KZGCommitment<G: Group> {
     commit: G
 }
@@ -186,6 +188,17 @@ impl<G: Group> KZGCommitment<G> {
     fn new(commit: G) -> Self {
         Self {
             commit
+        }
+    }
+
+    fn group_to_field(&self) -> G::ScalarField {
+        if self.commit.is_zero() {
+            <G::ScalarField as Field>::ZERO
+        } else {
+            let mut bytes: Vec<u8> = Vec::new();
+            // TODO: Check
+            self.commit.serialize_compressed(&mut bytes).unwrap();
+            <G::ScalarField as PrimeField>::from_le_bytes_mod_order(&bytes)
         }
     }
 }
@@ -241,7 +254,7 @@ impl Display for KZGError {
 impl Error for KZGError {}
 
 /// Implementation of the Feist-Khovratovich technique of "Fast Amortized KZG proofs".
-/// 
+#[derive(PartialEq, Clone)]
 pub struct KZGAmortized<E: Pairing> {
     _engine: PhantomData<E>
 }
@@ -326,7 +339,7 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E>
     }
 
     fn convert_commitment_to_data(commit: &Self::Commitment) -> <Self::PreparedData as VCPreparedData>::Item {
-        todo!()
+        commit.group_to_field()
     }
 }
 
