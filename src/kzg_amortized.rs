@@ -117,6 +117,9 @@ pub struct KZGPreparedData<F: PrimeField> {
     /// The evaluation domain of the dataset, aka the points that we will run polynomial evaluation at
     evaluations: Evaluations<F, GeneralEvaluationDomain<F>>,
 
+    /// Because evaluations may be sparse, we cache which entries are filled
+    filled_index: Vec<usize>,
+
     /// TODO: Remove
     poly: DensePolynomial<F>,
 
@@ -133,8 +136,14 @@ impl<F: PrimeField> KZGPreparedData<F> {
         let evals = Evaluations::from_vec_and_domain(points, domain);
         let poly = evals.interpolate_by_ref();
 
+        let mut filled: Vec<usize> = Vec::new();
+        for i in 0..len {
+            filled.push(i);
+        }
+
         Self {
             evaluations: evals,
+            filled_index: filled,
             poly: poly,
             size: len,
         }
@@ -178,6 +187,14 @@ impl<F: PrimeField> VCPreparedData for KZGPreparedData<F> {
 
     fn get(&self, index: usize) -> Option<&Self::Item> {
         self.evaluations.evals.get(index)
+    }
+
+    fn get_all(&self) -> Vec<(usize, Self::Item)> {
+        let mut res: Vec<(usize, Self::Item)> = Vec::new();
+        for i in self.filled_index.iter() {
+            res.push((*i, self.evaluations.evals[*i]));
+        }
+        res
     }
 
     fn max_size(&self) -> usize {

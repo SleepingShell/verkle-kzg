@@ -18,6 +18,8 @@ pub trait VCPreparedData {
 
     fn get(&self, index: usize) -> Option<&Self::Item>;
 
+    fn get_all(&self) -> Vec<(usize, Self::Item)>;
+
     /// Return the max amount of data that can be stored in this data
     fn max_size(&self) -> usize;
 }
@@ -35,7 +37,7 @@ pub trait VectorCommitment {
     type PreparedData: VCPreparedData;
 
     /// The Commitment to a vector.
-    type Commitment: PartialEq;
+    type Commitment: PartialEq + Clone;
 
     /// The proof for a single member of a vector.
     type Proof;

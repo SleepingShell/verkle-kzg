@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt::Debug,
+    fmt::{Debug, Display},
     ops::Index,
 };
 
@@ -15,6 +15,7 @@ use crate::{data_structures::VCPreparedData, VectorCommitment};
 
 // TODO: Generic underlying unit of keys, will allow packing units into memory
 trait Key {
+    //TODO: #[feature(generic_const_exprs)] would allow us to ensure the stem is N-1, but this is only available in nightly
     type FullKey;
     type Stem: Eq + Index<usize, Output = usize> + Debug;
 
@@ -29,6 +30,7 @@ trait Key {
 
 // N is the size of the key
 // T is the leaf value type (a leaf does not need to know its own key)
+#[derive(Clone)]
 enum Node<const N: usize, K, VC, T>
 where
     K: Key,
@@ -37,7 +39,7 @@ where
 {
     Internal {
         commit: Option<VC::Commitment>,
-        vc_data: VC::PreparedData,
+        //vc_data: VC::PreparedData,
         children: HashMap<usize, Node<N, K, VC, T>>,
     },
     Extension {
@@ -61,7 +63,7 @@ where
     T: Zero + Clone + PartialEq,
 {
     fn new_extension(stem: K::Stem, values: Vec<(usize, T)>) -> Self {
-        let mut vc_vec = vec![T::zero(); N + 1];
+        let mut vc_vec = vec![T::zero(); N];
         values.into_iter().for_each(|v| vc_vec[v.0] = v.1);
 
         Self::Extension {
@@ -74,12 +76,11 @@ where
     fn new_internal(nodes: Vec<(usize, Self)>) -> Self {
         Self::Internal {
             commit: None,
-            vc_data: <VC::PreparedData as VCPreparedData>::from_vec(vec![]),
+            //vc_data: <VC::PreparedData as VCPreparedData>::from_vec(vec![]),
             children: nodes.into_iter().map(|v| (v.0, v.1)).collect(),
         }
     }
 
-    //TODO: #[feature(generic_const_exprs)] would allow us to ensure the stem is N-1, but this is only available in nightly
     fn insert_into_stem(&mut self, cur_depth: usize, stem: K::Stem, values: Vec<(usize, T)>) {
         match self {
             Self::Extension {
@@ -101,6 +102,7 @@ where
             Self::Internal {
                 commit, children, ..
             } => {
+                *commit = None;
                 let k = stem[cur_depth];
                 let child = children.entry(k);
                 match child {
@@ -165,14 +167,92 @@ where
             _ => panic!("Called get_value on non-extension node"),
         }
     }
+
+    // TODO: For simplicity, right now prepared_data is created everytime a node does not have a cached commit (aka is new or dirty)
+    //      Eventually should store this value, and explore only parents storing a node's commitment as its prepared data and storing a dirty flag
+    fn gen_commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
+        match self {
+            Self::Extension {
+                stem,
+                commit,
+                vc_data,
+            } => {
+                if commit.is_some() {
+                    return Ok(&commit.as_ref().unwrap());
+                }
+
+                let c = VC::commit(crs, vc_data)?;
+                *commit = Some(c);
+
+                Ok(commit.as_ref().unwrap())
+            }
+            Self::Internal { commit, children } => {
+                if commit.is_some() {
+                    return Ok(commit.as_ref().unwrap());
+                }
+
+                let mut vc_vec = vec![T::zero(); N];
+                for (k, child) in children.iter_mut() {
+                    let cc = child.gen_commitment(crs)?;
+                    vc_vec[*k] = VC::convert_commitment_to_data(cc);
+                }
+
+                let vc_data = <VC::PreparedData as VCPreparedData>::from_vec(vc_vec);
+                let c = VC::commit(crs, &vc_data)?;
+                *commit = Some(c);
+
+                Ok(commit.as_ref().unwrap())
+            }
+        }
+    }
 }
 
+impl<const N: usize, K, VC, T> Debug for Node<N, K, VC, T>
+where
+    K: Key,
+    VC: VectorCommitment,
+    VC::Commitment: Debug,
+    VC::PreparedData: VCPreparedData<Item = T>,
+    T: Display + Zero + PartialEq,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Extension {
+                stem,
+                commit,
+                vc_data,
+            } => {
+                f.write_fmt(format_args!("Extension {{\n"));
+                f.write_fmt(format_args!("\tCommit: {:?}\n", commit));
+                f.write_fmt(format_args!("\tChildren: {{\n"));
+                for (i, c) in vc_data.get_all() {
+                    if c != T::zero() {
+                        f.write_fmt(format_args!("({},{})\n", i, c));
+                    }
+                }
+                f.write_str("\t}")
+            }
+            Self::Internal { commit, children } => {
+                f.write_fmt(format_args!("Inner {{\n"));
+                f.write_fmt(format_args!("\tCommit: {:?}\n", commit));
+                f.write_fmt(format_args!("\tChildren: {{\n"));
+                for c in children {
+                    f.write_fmt(format_args!("\t\t{:?}\n", c.1));
+                }
+                f.write_str("\t}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 struct VerkleTree<const N: usize, K, VC, T>
 where
     K: Key,
     VC: VectorCommitment,
+    VC::Commitment: Debug,
     VC::PreparedData: VCPreparedData<Item = T>,
-    T: Zero + Clone + PartialEq,
+    T: Zero + Clone + PartialEq + Display,
 {
     root: Node<N, K, VC, T>,
 }
@@ -181,8 +261,9 @@ impl<const N: usize, K, VC, T> VerkleTree<N, K, VC, T>
 where
     K: Key,
     VC: VectorCommitment,
+    VC::Commitment: Debug,
     VC::PreparedData: VCPreparedData<Item = T>,
-    T: Zero + Clone + PartialEq,
+    T: Zero + Clone + PartialEq + Display,
 {
     fn new() -> Self {
         Self {
@@ -202,9 +283,13 @@ where
             None => None,
         }
     }
+
+    fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
+        self.root.gen_commitment(crs)
+    }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone)]
 struct VanillaKey<const F: usize, const S: usize>;
 impl<const F: usize, const S: usize> Key for VanillaKey<F, S> {
     type FullKey = [usize; F];
@@ -245,6 +330,7 @@ mod tests {
     const ARITY: usize = 10;
     type TestKey = VanillaKey<KEY_LEN, { KEY_LEN - 1 }>;
     type TestFullKey = <TestKey as Key>::FullKey;
+
     type F = <Bn254 as Pairing>::ScalarField;
     type KZG = KZGAmortized<Bn254>;
     type TestTree = VerkleTree<ARITY, TestKey, KZG, F>;
@@ -316,7 +402,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut tree = TestTree::new();
 
-        let key = random_key(3, None);
+        let key = random_key(ARITY, None);
         let val1: F = rng.gen();
         let val2: F = rng.gen();
 
@@ -324,5 +410,20 @@ mod tests {
         tree.insert_single(key, val2);
 
         assert!(tree.get_single(&key).unwrap() == &val2);
+    }
+
+    #[test]
+    fn test_commitment() {
+        let mut rng = rand::thread_rng();
+        let mut tree: TestTree = TestTree::new();
+        let crs = KZG::setup(ARITY, &mut rng).unwrap();
+
+        let key = random_key(ARITY, None);
+        let val: F = rng.gen();
+        tree.insert_single(key, val);
+
+        println!("{:?}", tree.root);
+        let commit = tree.commitment(&crs);
+        println!("{:?}", commit);
     }
 }
