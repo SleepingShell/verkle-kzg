@@ -32,12 +32,12 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1, G2>)
 }
 
 fn bench_setup(c: &mut Criterion) {
-    let base = 64;
+    let base = 32;
     let rng = &mut rand::thread_rng();
 
     let mut group = c.benchmark_group("CRS setup");
     group.sample_size(10);
-    for size in [base, base * 64, base * 512].iter() {
+    for size in [base, base * 64, base * 128, base * 512].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| KZG::setup(size, rng));
