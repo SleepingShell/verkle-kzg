@@ -1,2 +1,3 @@
-This library provides an implementation of Verkle Trees utilizing KZG. A tl;dr is that this is a tree-like structure, similar to Merkle trees, but each node using a *vector commitment* for its children instead of a naive hash.
+This repository hosts a library that provides a VectorCommitment and several vector commitment scheme implementations, and a verkle tree implementation.
 
+The verkle tree is similar to a merkle tree in that it is a tree structure that commits to its children, but instead of using hashes to provide binding, it uses a vector commitment scheme. The verkle tree itself is also a vector commitment scheme.

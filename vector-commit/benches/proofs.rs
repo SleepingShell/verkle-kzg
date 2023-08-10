@@ -37,7 +37,7 @@ fn bench_setup(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("CRS setup");
     group.sample_size(10);
-    for size in [base, base * 64, base * 512, base * 2048].iter() {
+    for size in [base, base * 64, base * 512].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| KZG::setup(size, rng));
