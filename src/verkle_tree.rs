@@ -13,16 +13,13 @@ use crate::{data_structures::VCPreparedData, VectorCommitment};
 /// - Inner nodes: Nodes whose children are either other inner nodes, or Extension nodes.
 /// - Extension nodes: Nodes who contain the actual values stored in the tree, as leaves.
 
-trait VerkleNode {
-    fn commitment();
-    fn insert_leaf();
-    fn insert_node();
-}
-
 // TODO: Generic underlying unit of keys, will allow packing units into memory
 trait Key {
     type FullKey;
     type Stem: Eq + Index<usize, Output = usize> + Debug;
+
+    /// Return the full key length
+    fn len() -> usize;
 
     fn diff_depth(cur_depth: usize, first: &Self::Stem, other: &Self::Stem) -> usize;
 
@@ -36,6 +33,7 @@ enum Node<const N: usize, K, VC, T>
 where
     K: Key,
     VC: VectorCommitment,
+    VC::PreparedData: VCPreparedData<Item = T>,
 {
     Internal {
         commit: Option<VC::Commitment>,
@@ -46,7 +44,6 @@ where
         stem: K::Stem,
         commit: Option<VC::Commitment>,
         vc_data: VC::PreparedData,
-        values: HashMap<usize, T>
     },
 }
 
@@ -64,24 +61,13 @@ where
     T: Zero + Clone + PartialEq,
 {
     fn new_extension(stem: K::Stem, values: Vec<(usize, T)>) -> Self {
-        let mut max = 0;
-        let map: HashMap<usize, T> = values
-            .into_iter()
-            .map(|v| {
-                if v.0 > max {
-                    max = v.0;
-                }
-                (v.0, v.1)
-            })
-            .collect();
-        let mut vc_vec = vec![T::zero(); max + 1];
-        map.iter().for_each(|v| vc_vec[*v.0] = v.1.clone());
+        let mut vc_vec = vec![T::zero(); N + 1];
+        values.into_iter().for_each(|v| vc_vec[v.0] = v.1);
 
         Self::Extension {
             stem,
             commit: None,
             vc_data: <VC::PreparedData as VCPreparedData>::from_vec(vc_vec),
-            values: map,
         }
     }
 
@@ -99,7 +85,7 @@ where
             Self::Extension {
                 stem: self_stem,
                 commit,
-                values: self_values,
+                vc_data,
                 ..
             } => {
                 // This function should only ever be called on an Extension node to insert values. I.e internal nodes
@@ -109,13 +95,12 @@ where
                 }
                 *commit = None;
                 values.into_iter().for_each(|v| {
-                    self_values.insert(v.0, v.1);
+                    vc_data.set_evaluation(v.0, v.1);
                 });
             }
             Self::Internal {
                 commit, children, ..
             } => {
-                //cur_depth += 1;
                 let k = stem[cur_depth];
                 let child = children.entry(k);
                 match child {
@@ -125,7 +110,7 @@ where
                             Self::Extension {
                                 stem: child_stem, ..
                             } => {
-                                if &stem == child_stem || cur_depth == N - 2 {
+                                if &stem == child_stem || cur_depth == K::len() - 2 {
                                     child_as_node.insert_into_stem(cur_depth + 1, stem, values);
                                 } else {
                                     let depth = K::diff_depth(cur_depth, child_stem, &stem);
@@ -164,27 +149,22 @@ where
             }
             Self::Internal {
                 commit, children, ..
-            } => {
-                //cur_depth += 1;
-                match children.get(&stem[cur_depth]) {
-                    Some(c) => {
-                        cur_depth += 1;
-                        c.get_stem(cur_depth, stem)
-                    }
-                    None => None,
+            } => match children.get(&stem[cur_depth]) {
+                Some(c) => {
+                    cur_depth += 1;
+                    c.get_stem(cur_depth, stem)
                 }
-            }
+                None => None,
+            },
         }
     }
 
-    fn get_value(&self, index: &usize) -> Option<&T> {
+    fn get_value(&self, index: usize) -> Option<&T> {
         match self {
-            Self::Extension { values, .. } => values.get(index),
+            Self::Extension { vc_data, .. } => vc_data.get(index),
             _ => panic!("Called get_value on non-extension node"),
         }
     }
-
-    fn gen_commitment(&mut self) {}
 }
 
 struct VerkleTree<const N: usize, K, VC, T>
@@ -218,7 +198,7 @@ where
     fn get_single(&self, key: &K::FullKey) -> Option<&T> {
         let (stem, unit) = K::split_full(&key);
         match self.root.get_stem(0, stem) {
-            Some(stem) => stem.get_value(&unit),
+            Some(stem) => stem.get_value(unit),
             None => None,
         }
     }
@@ -229,6 +209,10 @@ struct VanillaKey<const F: usize, const S: usize>;
 impl<const F: usize, const S: usize> Key for VanillaKey<F, S> {
     type FullKey = [usize; F];
     type Stem = [usize; S];
+
+    fn len() -> usize {
+        F
+    }
 
     fn diff_depth(cur_depth: usize, first: &Self::Stem, other: &Self::Stem) -> usize {
         let mut d: usize = cur_depth + 1;
@@ -258,11 +242,12 @@ mod tests {
     use ark_bn254::Bn254;
 
     const KEY_LEN: usize = 3;
+    const ARITY: usize = 10;
     type TestKey = VanillaKey<KEY_LEN, { KEY_LEN - 1 }>;
     type TestFullKey = <TestKey as Key>::FullKey;
     type F = <Bn254 as Pairing>::ScalarField;
     type KZG = KZGAmortized<Bn254>;
-    type TestTree = VerkleTree<KEY_LEN, TestKey, KZG, F>;
+    type TestTree = VerkleTree<ARITY, TestKey, KZG, F>;
 
     fn random_key(arity: usize, prefix: Option<&<TestKey as Key>::Stem>) -> TestFullKey {
         let mut rng = rand::thread_rng();
@@ -284,7 +269,6 @@ mod tests {
     #[test]
     fn test_insert_get_leaves() {
         let NUM_LEAVES = 50;
-        let ARITY = 10;
         let mut rng = rand::thread_rng();
 
         let mut tree1 = TestTree::new();

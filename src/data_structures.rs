@@ -16,6 +16,8 @@ pub trait VCPreparedData {
 
     fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error>;
 
+    fn get(&self, index: usize) -> Option<&Self::Item>;
+
     /// Return the max amount of data that can be stored in this data
     fn max_size(&self) -> usize;
 }
@@ -48,7 +50,7 @@ pub trait VectorCommitment {
     /// and proving inclusion of vectors up to `max_items` items
     fn setup<R: RngCore>(
         max_items: usize,
-        rng: &mut R
+        rng: &mut R,
     ) -> Result<Self::UniversalParams, Self::Error>;
 
     /// Commit a prepared data vector (`data`) to the `key` UniversalParams.
@@ -70,14 +72,14 @@ pub trait VectorCommitment {
     fn prove_all(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
-        data: &Self::PreparedData
+        data: &Self::PreparedData,
     ) -> Result<Self::BatchProof, Self::Error>;
 
     /// Verify that the `proof` is valid with respect to the `key` and `commitment`
     fn verify(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
-        proof: &Self::Proof
+        proof: &Self::Proof,
     ) -> Result<bool, Self::Error>;
 
     /// Verify multiple proofs are valid
@@ -85,10 +87,11 @@ pub trait VectorCommitment {
     fn verify_batch(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
-        proof: &Self::BatchProof
+        proof: &Self::BatchProof,
     ) -> Result<bool, Self::Error>;
 
     /// Converts a commitment to `PreparedData::Item`
-    fn convert_commitment_to_data(commit: &Self::Commitment) -> <Self::PreparedData as VCPreparedData>::Item;
-    
+    fn convert_commitment_to_data(
+        commit: &Self::Commitment,
+    ) -> <Self::PreparedData as VCPreparedData>::Item;
 }
