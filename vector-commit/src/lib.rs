@@ -1,3 +1,11 @@
+//! `vector-commit` is a collection of traits for use in a vector commitment (VC) scheme.
+//! A vector of data (the dataset) is committed to with a binding property (you cannot change the dataset after commitment).
+//! One can then generate proofs of inclusion for the data to the commitment. These proofs can then
+//! verify that the data was indeed in the dataset committed to by the VC scheme.
+//!
+//! Most VC schemes aim to generate constant or logarithmic sized proofs with efficient verification.
+//! Some VC scheme require a trusted setup in which parameters are generated for proving/verification.
+//! The binding property of these schemes is reliant on no one knowing the secret used in the trusted setup.
 use std::{error::Error, fmt::Debug};
 
 use ark_ff::{PrimeField, Zero};
@@ -5,11 +13,13 @@ use rand::RngCore;
 
 pub mod kzg_amortized;
 
+/// The proving and verification parameters for the VC scheme
 pub trait VCUniversalParams {
     /// Outputs the maximum number of items that can be committed to with this key
     fn max_size(&self) -> usize;
 }
 
+/// The dataset that a VC scheme will work over. This should include any preprocessing that is required
 pub trait VCPreparedData {
     type Item: Clone + Zero;
     type Error: Debug;
@@ -26,13 +36,10 @@ pub trait VCPreparedData {
     fn max_size(&self) -> usize;
 }
 
-/// A vector commitment schemes allows committing to a vector of data over a Finite Field,
-/// and generating proofs of inclusion.
-/// TODO: This should be a separate module
+/// A vector commitment schemes allows committing to a vector of data and generating proofs of inclusion.
 pub trait VectorCommitment {
     /// The universal parameters for the vector commitment scheme.
     /// CURRENTLY this API does not support differing committing, proving and verifying keys
-    /// TODO: Seprate keys^
     type UniversalParams: VCUniversalParams;
 
     /// The vector dataset that has gone through preparation to use with the Vector Commitment.

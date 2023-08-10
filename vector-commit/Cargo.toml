@@ -1,9 +1,12 @@
 [package]
 name = "vector-commit"
+description = "A collection of traits to use with vector commitment schemes, and a few implementations of VC"
 version = "0.1.0"
+authors = "SleepingShell"
+keywords = ["cryptography"]
+repository = "https://github.com/SleepingShell/verkle-tree-rs/tree/main/vector-commit"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "MIT"
 
 [dependencies]
 ark-ff = "0.4"
