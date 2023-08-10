@@ -15,7 +15,7 @@ use crate::{data_structures::VCPreparedData, VectorCommitment};
 
 // TODO: Generic underlying unit of keys, will allow packing units into memory
 trait Key {
-    //TODO: #[feature(generic_const_exprs)] would allow us to ensure the stem is N-1, but this is only available in nightly
+    // #[feature(generic_const_exprs)] would allow us to ensure the stem is N-1, but this is only available in nightly
     type FullKey;
     type Stem: Eq + Index<usize, Output = usize> + Debug;
 
@@ -96,7 +96,7 @@ where
                 }
                 *commit = None;
                 values.into_iter().for_each(|v| {
-                    vc_data.set_evaluation(v.0, v.1);
+                    vc_data.set_evaluation(v.0, v.1).unwrap();
                 });
             }
             Self::Internal {
@@ -222,22 +222,22 @@ where
                 commit,
                 vc_data,
             } => {
-                f.write_fmt(format_args!("Extension {{\n"));
-                f.write_fmt(format_args!("\tCommit: {:?}\n", commit));
-                f.write_fmt(format_args!("\tChildren: {{\n"));
+                f.write_fmt(format_args!("Extension ({:?}) {{\n", stem))?;
+                f.write_fmt(format_args!("\tCommit: {:?}\n", commit))?;
+                f.write_fmt(format_args!("\tChildren: {{\n"))?;
                 for (i, c) in vc_data.get_all() {
                     if c != T::zero() {
-                        f.write_fmt(format_args!("({},{})\n", i, c));
+                        f.write_fmt(format_args!("({},{})\n", i, c))?;
                     }
                 }
                 f.write_str("\t}")
             }
             Self::Internal { commit, children } => {
-                f.write_fmt(format_args!("Inner {{\n"));
-                f.write_fmt(format_args!("\tCommit: {:?}\n", commit));
-                f.write_fmt(format_args!("\tChildren: {{\n"));
+                f.write_fmt(format_args!("Inner {{\n"))?;
+                f.write_fmt(format_args!("\tCommit: {:?}\n", commit))?;
+                f.write_fmt(format_args!("\tChildren: {{\n"))?;
                 for c in children {
-                    f.write_fmt(format_args!("\t\t{:?}\n", c.1));
+                    f.write_fmt(format_args!("\t\t{:?}\n", c.1))?;
                 }
                 f.write_str("\t}")
             }
