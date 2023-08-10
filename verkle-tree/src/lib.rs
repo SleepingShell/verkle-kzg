@@ -4,9 +4,8 @@ use std::{
     ops::Index,
 };
 
-use ark_ff::Zero;
-
-use crate::{data_structures::VCPreparedData, VectorCommitment};
+use num::Zero;
+use vector_commit::{VCPreparedData, VectorCommitment};
 
 /// A Verkle Tree implementation, specifically using Ethereum's stem and extension model.
 /// There are two types of nodes in this model, although I have attempted to leave open easy addition for more types.
@@ -323,8 +322,8 @@ mod tests {
     use rand::{seq::SliceRandom, Rng};
 
     use super::*;
-    use crate::kzg_amortized::KZGAmortized;
     use ark_bn254::Bn254;
+    use vector_commit::kzg_amortized::KZGAmortized;
 
     const KEY_LEN: usize = 3;
     const ARITY: usize = 10;

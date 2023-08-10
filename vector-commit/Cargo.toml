@@ -1,0 +1,24 @@
+[package]
+name = "vector-commit"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ark-ff = "0.4"
+ark-ec = "0.4"
+ark-poly = "0.4"
+ark-bn254 = "0.4"
+num = "0.4.1"
+rand = "0.8.5"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "proofs"
+harness = false
+
+[profile.release]
+debug = true

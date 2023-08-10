@@ -3,6 +3,8 @@ use std::{error::Error, fmt::Debug};
 use ark_ff::{PrimeField, Zero};
 use rand::RngCore;
 
+pub mod kzg_amortized;
+
 pub trait VCUniversalParams {
     /// Outputs the maximum number of items that can be committed to with this key
     fn max_size(&self) -> usize;

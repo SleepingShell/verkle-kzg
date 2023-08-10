@@ -7,7 +7,7 @@ use ark_poly::{
     GeneralEvaluationDomain, Polynomial,
 };
 
-use crate::data_structures::{VCPreparedData, VCUniversalParams, VectorCommitment};
+use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
 
 /// KZGKey represents the universal parameters, AKA reference string, for both
 /// committing polynomials and verifying commitments

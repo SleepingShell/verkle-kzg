@@ -1,23 +1,8 @@
-[package]
-name = "verkle-kzg"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-ark-ff = "0.4"
-ark-ec = "0.4"
-ark-poly = "0.4"
-ark-bn254 = "0.4"
-rand = "0.8.5"
-num = "0.4.1"
-digest = "0.10.7"
-
-[dev-dependencies]
-criterion = "0.5"
-
-[[bench]]
-name = "proofs"
-harness = false
+[workspace]
+members = [
+  "vector-commit",
+  "verkle-tree",
+]
 
 [profile.release]
 debug = true
