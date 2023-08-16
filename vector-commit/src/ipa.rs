@@ -5,9 +5,8 @@ use std::{
 };
 
 use ark_ec::Group;
-use ark_ff::{field_hashers::HashToField, Field, One, Zero};
+use ark_ff::{field_hashers::HashToField, Field, One};
 use ark_serialize::CanonicalSerialize;
-use digest::Digest;
 
 use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
 
@@ -260,18 +259,16 @@ fn split<T: Clone>(a: Vec<T>) -> (Vec<T>, Vec<T>) {
 mod tests {
     use super::*;
 
-    use std::ops::{Add, AddAssign};
-
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
     use ark_ec::Group;
-    use ark_ff::{field_hashers::DefaultFieldHasher, Field, One, UniformRand};
+    use ark_ff::field_hashers::DefaultFieldHasher;
 
     use sha2::Sha256;
 
     type F = <Bn254 as Pairing>::ScalarField;
     type G = <Bn254 as Pairing>::G1;
-    type hasher = DefaultFieldHasher<Sha256>;
+    type Hasher = DefaultFieldHasher<Sha256>;
 
     #[test]
     fn test_commit_poly() {
@@ -281,11 +278,11 @@ mod tests {
 
         let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();
 
-        let crs = IPAUniversalParams::<G, hasher>::new(gens, q);
+        let crs = IPAUniversalParams::<G, Hasher>::new(gens, q);
         let data = IPAPreparedData::<F>::new(coeffs);
 
         let commit = commit_data(&crs, &data);
-        let mut poly_proof = prove_data_commit(&crs, &commit, &data);
+        let poly_proof = prove_data_commit(&crs, &commit, &data);
         assert!(verify_data_commit(&crs, &commit, &poly_proof));
     }
 
@@ -297,7 +294,7 @@ mod tests {
 
         let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();
 
-        let crs = IPAUniversalParams::<G, hasher>::new(gens, q);
+        let crs = IPAUniversalParams::<G, Hasher>::new(gens, q);
         let data = IPAPreparedData::<F>::new(coeffs);
         let commit = commit_data(&crs, &data);
 
