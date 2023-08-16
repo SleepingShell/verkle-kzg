@@ -11,6 +11,7 @@ use std::{error::Error, fmt::Debug};
 use ark_ff::{PrimeField, Zero};
 use rand::RngCore;
 
+pub mod ipa;
 pub mod kzg_amortized;
 
 /// The proving and verification parameters for the VC scheme

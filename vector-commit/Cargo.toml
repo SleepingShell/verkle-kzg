@@ -13,8 +13,11 @@ ark-ff = "0.4"
 ark-ec = "0.4"
 ark-poly = "0.4"
 ark-bn254 = "0.4"
+ark-serialize = "0.4.2"
 num = "0.4.1"
 rand = "0.8.5"
+digest = "0.10.7"
+sha2 = "0.10.7"
 
 [dev-dependencies]
 criterion = "0.5"
