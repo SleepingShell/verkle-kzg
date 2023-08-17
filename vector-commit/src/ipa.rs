@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_commit_poly() {
-        let size = 8;
+        let size = 32;
         let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
         let q = G::generator() * F::from(size + 1);
 
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_eval_proof() {
-        let size = 8;
+        let size = 32;
         let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
         let q = G::generator() * F::from(size + 1);
 
