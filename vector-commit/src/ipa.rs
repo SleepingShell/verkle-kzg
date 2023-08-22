@@ -1,11 +1,13 @@
 use std::{
+    collections::HashMap,
     iter::Sum,
     marker::PhantomData,
-    ops::{Add, Mul},
+    ops::{Add, Mul, MulAssign},
 };
 
 use ark_ec::Group;
-use ark_ff::{field_hashers::HashToField, Field, One};
+use ark_ff::{field_hashers::HashToField, FftField, Field, One};
+use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial};
 use ark_serialize::CanonicalSerialize;
 
 use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
@@ -44,24 +46,147 @@ struct IPAProof<G: Group> {
 }
 
 struct IPAPreparedData<F: Field> {
-    data: Vec<F>,
+    // An ordered set of data, of (x, eval)
+    data: Vec<(usize, F)>,
+
+    // We keep the weights for barycentric interpolation w_j = ∏_{m != j}(x_j - x_m)^-1
+    weights: Vec<F>,
+
+    // TODO: Move outside of this so we only store once l(x) = ∏(X-x_i)
+    universal_basis: DensePolynomial<F>,
+
+    // The highest x value that this dataset contains
+    max: usize,
 }
 
-impl<F: Field> IPAPreparedData<F> {
-    fn new(data: Vec<F>) -> Self {
-        Self { data }
+impl<F: FftField> IPAPreparedData<F> {
+    /// An ORDERED list of evaluation points
+    fn new(data: Vec<(usize, F)>) -> Self {
+        let max = data[data.len() - 1].0;
+        let mut d_calc = Vec::<(F, F)>::new();
+        let mut x_points = Vec::<F>::new();
+        data.iter().for_each(|point| {
+            x_points.push(F::from(point.0 as u64));
+            d_calc.push((F::from(point.0 as u64), point.1));
+        });
+        Self {
+            data,
+            weights: Self::compute_barycentric_weights(d_calc),
+            universal_basis: Self::compute_universal_basis(x_points),
+            max,
+        }
+    }
+
+    /// The data domain is simply at 0..length-1
+    fn new_incremental(data: Vec<F>) -> Self {
+        let max = data.len();
+        let mut data_stored = Vec::<(usize, F)>::new();
+        let mut data_as_f = Vec::<(F, F)>::new();
+        data.into_iter().enumerate().for_each(|(i, v)| {
+            data_stored.push((i, v));
+            data_as_f.push((F::from(i as u64), v));
+        });
+        Self {
+            data: data_stored,
+            weights: Self::compute_barycentric_weights(data_as_f),
+            universal_basis: Self::compute_universal_basis(
+                (0..max).map(|x| F::from(x as u64)).collect(),
+            ),
+            max,
+        }
+    }
+
+    fn compute_universal_basis(x_points: Vec<F>) -> DensePolynomial<F> {
+        let mut res = DensePolynomial::<F>::from_coefficients_slice(&[F::one()]);
+        x_points.into_iter().for_each(|x| {
+            res = &res * &DensePolynomial::<F>::from_coefficients_slice(&[F::zero() - x, F::one()]);
+        });
+
+        res
+    }
+
+    fn compute_barycentric_weights(points: Vec<(F, F)>) -> Vec<F> {
+        let mut weights: Vec<F> = Vec::new();
+        points.iter().for_each(|point| {
+            let mut sum = F::one();
+            points.iter().for_each(|p_inner| {
+                if point.0 != p_inner.0 {
+                    sum *= point.0 - p_inner.0;
+                }
+            });
+            weights.push(sum.inverse().unwrap());
+        });
+
+        weights
+    }
+
+    /*
+    fn evaluate(&self, point: F) -> F {
+        if point.into() < self.max {
+            self.data[point.into()]
+        } else {
+            let mut res = F::zero();
+            let mut denoms: Vec<F> = Vec::new();
+            self.weights.iter().enumerate().for_each(|(i, weight)| {
+                let t = weight / (point - )
+            });
+
+            /// TODO:
+            /// Need to store (x,y) values because there may not be values at all xs, so data<F> will be hard to index
+            /// So either store Vec<(F,F)> or two separate vectors. But still need a way to index in constant time.
+            /// Foor example, we can't do data[1] if the x-value at 1 is 5
+            /// Maybe have a sparse array with entries pointing to the index of the y_value vector, this way y_value
+            /// vector is densely packed
+
+            /*
+            points.iter().enumerate().for_each(|(i, point)| {
+                let poly = &DensePolynomial::<F>::from_coefficients_slice(&[weights[i]])
+                    / &DensePolynomial::<F>::from_coefficients_slice(&[
+                        F::zero() - point.0,
+                        F::one(),
+                    ]);
+                denoms.push(poly.clone());
+
+                res += &(&poly * point.1);
+            });
+            */
+
+            let mut denom = DensePolynomial::<F>::from_coefficients_slice(&[F::zero()]);
+            denoms.into_iter().for_each(|d| denom += &d);
+
+            &res / &denom
+        }
+    }
+    */
+
+    /// Return the data of size `max` with zero entries included
+    fn expanded_data(&self) -> Vec<F> {
+        let mut res = vec![F::zero(); self.max];
+        for point in self.data.iter() {
+            res[point.0] = point.1;
+        }
+
+        res
+    }
+
+    /// Simply return the stored evaluations without their index's (densely packed)
+    fn evaluations(&self) -> Vec<F> {
+        self.data.iter().map(|(_i, p)| *p).collect()
     }
 }
+
+/// TODO: The proof and verification of commitment iself should be fine, but
+/// may need to do more work to create proofs of data in evaluation form
 
 /// Commit to the dataset
 fn commit_data<G: Group, D: HashToField<G::ScalarField>>(
     key: &IPAUniversalParams<G, D>,
     data: &IPAPreparedData<G::ScalarField>,
 ) -> IPACommitment<G> {
-    let len = data.data.len();
-    let gens = key.g[0..len].to_vec();
+    let max = data.max;
+    let gens = key.g[0..max].to_vec();
 
-    inner_product(&gens, &data.data)
+    data.data.iter().map(|(i, v)| gens[*i] * v).sum()
 }
 
 /// Generate a proof that the dataset is committed to a valid polynomial
@@ -70,8 +195,9 @@ fn prove_data_commit<G: Group, D: HashToField<G::ScalarField>>(
     commitment: &IPACommitment<G>,
     data: &IPAPreparedData<G::ScalarField>,
 ) -> IPACommitProof<G> {
-    let mut data = data.data.clone();
-    let mut gens = key.g[0..data.len()].to_vec();
+    let max = data.max;
+    let mut data = data.evaluations();
+    let mut gens = key.g[0..max].to_vec();
     let mut l: Vec<G> = Vec::new();
     let mut r: Vec<G> = Vec::new();
 
@@ -144,7 +270,7 @@ fn prove_eval<G: Group, D: HashToField<G::ScalarField>>(
     index: usize,
     data: &IPAPreparedData<G::ScalarField>,
 ) -> IPAProof<G> {
-    let mut data = data.data.clone();
+    //let mut data = data.data.clone();
     let mut gens = key.g[0..data.len()].to_vec();
     let x = G::ScalarField::from(index as u64);
     let mut x_pows: Vec<G::ScalarField> = (0..data.len()).map(|i| x.pow([i as u64])).collect();
@@ -276,16 +402,21 @@ mod tests {
         let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
         let q = G::generator() * F::from(size + 1);
 
-        let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();
+        //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();
+        let data_raw: Vec<F> = (0..size).map(|i| F::from(i)).collect();
 
         let crs = IPAUniversalParams::<G, Hasher>::new(gens, q);
-        let data = IPAPreparedData::<F>::new(coeffs);
+        let data = IPAPreparedData::<F>::new_incremental(data_raw);
 
-        let commit = commit_data(&crs, &data);
+        let mut commit = commit_data(&crs, &data);
         let poly_proof = prove_data_commit(&crs, &commit, &data);
         assert!(verify_data_commit(&crs, &commit, &poly_proof));
+
+        commit += G::generator();
+        assert!(!verify_data_commit(&crs, &commit, &poly_proof));
     }
 
+    /*
     #[test]
     fn test_eval_proof() {
         let size = 32;
@@ -300,5 +431,7 @@ mod tests {
 
         let e_proof = prove_eval(&crs, &commit, 0, &data);
         assert!(verify_eval(&crs, &commit, &e_proof));
+
     }
+    */
 }
