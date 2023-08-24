@@ -6,7 +6,7 @@ use std::{
 };
 
 use ark_ec::Group;
-use ark_ff::{field_hashers::HashToField, FftField, Field, One};
+use ark_ff::{field_hashers::HashToField, FftField, Field, One, Zero};
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, Polynomial};
 use ark_serialize::CanonicalSerialize;
 
@@ -41,7 +41,7 @@ struct IPAProof<G: Group> {
     l: Vec<G>,
     r: Vec<G>,
     tip: G::ScalarField,
-    x: G::ScalarField,
+    x: usize,
     y: G::ScalarField,
 }
 
@@ -259,11 +259,8 @@ fn prove_eval<G: Group, D: HashToField<G::ScalarField>>(
     let mut x_pows = data.compute_b_vector(index);
     let mut gens = key.g[0..data.max + 1].to_vec();
     let mut data = data.expanded_data();
-    //let x = G::ScalarField::from(index as u64);
-    //let mut x_pows: Vec<G::ScalarField> = (0..data.len()).map(|i| x.pow([i as u64])).collect();
+    let y = data[index];
 
-    //TODO: Temporary evaluation at 'index'. Will be migrating to evluation form
-    let y = inner_product(&data, &x_pows);
     let hasher = D::new(&[]);
 
     let mut l: Vec<G> = Vec::new();
@@ -296,7 +293,7 @@ fn prove_eval<G: Group, D: HashToField<G::ScalarField>>(
         l,
         r,
         tip: data[0],
-        x: G::ScalarField::from(index as u64),
+        x: index,
         y,
     }
 }
@@ -308,8 +305,8 @@ fn verify_eval<G: Group, D: HashToField<G::ScalarField>>(
 ) -> bool {
     let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
     let mut c = commitment.clone();
-    let mut x_pows: Vec<G::ScalarField> =
-        (0..gens.len()).map(|i| proof.x.pow([i as u64])).collect();
+    let mut x_pows = vec![G::ScalarField::zero(); gens.len()];
+    x_pows[proof.x] = G::ScalarField::one();
     let hasher = D::new(&[]);
     let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
     let mut points_coeffs = vec![G::ScalarField::one()];
@@ -378,6 +375,7 @@ mod tests {
     use ark_ec::Group;
     use ark_ff::field_hashers::DefaultFieldHasher;
 
+    use rand::{thread_rng, Rng};
     use sha2::Sha256;
 
     type F = <Bn254 as Pairing>::ScalarField;
@@ -406,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_eval_proof() {
-        let size = 32;
+        let size: u64 = 32;
         let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
         let q = G::generator() * F::from(size + 1);
 
@@ -416,7 +414,8 @@ mod tests {
         let data = IPAPreparedData::<F>::new_incremental(data_raw);
         let commit = commit_data(&crs, &data);
 
-        let mut e_proof = prove_eval(&crs, &commit, 0, &data);
+        let index = thread_rng().gen_range(0..size) as usize;
+        let e_proof = prove_eval(&crs, &commit, index, &data);
         assert!(verify_eval(&crs, &commit, &e_proof));
     }
 }
