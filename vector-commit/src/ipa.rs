@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     iter::Sum,
     marker::PhantomData,
-    ops::{Add, Mul, MulAssign},
+    ops::{Add, Mul},
 };
 
 use ark_ec::Group;
@@ -13,8 +13,8 @@ use ark_serialize::CanonicalSerialize;
 use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
 
 struct IPAUniversalParams<G: Group, D: HashToField<G::ScalarField>> {
-    g: Vec<G>, // Gens to commit the coefficients of the polynomial
-    q: G,      // Gen to commit to the evaluation of the polynomial
+    g: Vec<G>, // Gens to commit the evaluations of the dataset
+    q: G,      // Gen to commit to the inner product of the dataset with it's b vector
     digest: PhantomData<D>,
 }
 
@@ -55,7 +55,7 @@ struct IPAPreparedData<F: Field> {
     // TODO: Move outside of this so we only store once l(x) = ∏(X-x_i)
     universal_basis: DensePolynomial<F>,
 
-    //
+    // Derivative of universal basis, ∑ l(x)/(X-x_i)
     universal_basis_derivative: DensePolynomial<F>,
 
     // The highest x value that this dataset contains
