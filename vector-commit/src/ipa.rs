@@ -191,11 +191,11 @@ fn prove_data_commit<G: Group, D: HashToField<G::ScalarField>>(
     let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
 
     while data.len() > 1 {
-        let (poly_l, poly_r) = split(data);
+        let (data_l, data_r) = split(data);
         let (gens_l, gens_r) = split(gens);
 
-        let y_l = inner_product(&gens_r, &poly_l);
-        let y_r = inner_product(&gens_l, &poly_r);
+        let y_l = inner_product(&gens_r, &data_l);
+        let y_r = inner_product(&gens_l, &data_r);
         l.push(y_l);
         r.push(y_r);
 
@@ -204,7 +204,7 @@ fn prove_data_commit<G: Group, D: HashToField<G::ScalarField>>(
             1,
         )[0];
 
-        data = vec_add_and_distribute(&poly_l, &poly_r, ra);
+        data = vec_add_and_distribute(&data_l, &data_r, ra);
         gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
     }
 
@@ -238,7 +238,6 @@ fn verify_data_commit<G: Group, D: HashToField<G::ScalarField>>(
         )[0];
 
         c = proof.l[i] + c * ra + proof.r[i] * ra.square();
-
         points_coeffs = points_coeffs
             .into_iter()
             .map(|x| vec![x * ra, x])
@@ -269,22 +268,20 @@ fn prove_eval<G: Group, D: HashToField<G::ScalarField>>(
 
     let q = key.q * ra;
     while data.len() > 1 {
-        let (poly_l, poly_r) = split(data);
+        let (data_l, data_r) = split(data);
         let (gens_l, gens_r) = split(gens);
         let (x_pows_l, x_pows_r) = split(x_pows);
-
-        let y_l = inner_product(&gens_r, &poly_l) + q * inner_product(&poly_l, &x_pows_r);
-        let y_r = inner_product(&gens_l, &poly_r) + q * inner_product(&poly_r, &x_pows_l);
+        let y_l = inner_product(&gens_r, &data_l) + q * inner_product(&data_l, &x_pows_r);
+        let y_r = inner_product(&gens_l, &data_r) + q * inner_product(&data_r, &x_pows_l);
 
         l.push(y_l);
         r.push(y_r);
-
         ra = hasher.hash_to_field(
             &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
             1,
         )[0];
 
-        data = vec_add_and_distribute(&poly_l, &poly_r, ra);
+        data = vec_add_and_distribute(&data_l, &data_r, ra);
         gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
         x_pows = vec_add_and_distribute(&x_pows_r, &x_pows_l, ra);
     }
@@ -329,7 +326,7 @@ fn verify_eval<G: Group, D: HashToField<G::ScalarField>>(
             .into_iter()
             .map(|x| vec![x * ra, x])
             .flatten()
-            .collect();
+            .collect() //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();ct();
     }
 
     let combined_point = inner_product(&gens, &points_coeffs);
@@ -388,7 +385,6 @@ mod tests {
         let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
         let q = G::generator() * F::from(size + 1);
 
-        //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();
         let data_raw: Vec<F> = (0..size).map(|i| F::from(i)).collect();
 
         let crs = IPAUniversalParams::<G, Hasher>::new(gens, q);
