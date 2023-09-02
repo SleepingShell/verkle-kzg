@@ -88,7 +88,12 @@ impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
         if point < F::from(N as u64) {
             let mut res = vec![F::zero(); N];
             //FIXME: THIS IS SO BAD OH MY GOD
-            let point_usize = point.into_bigint().to_bytes_le()[0] as usize;
+            let mut point_usize = 0usize;
+            point
+                .into_bigint()
+                .to_bytes_be()
+                .into_iter()
+                .for_each(|b| point_usize = (point_usize << 8) | b as usize);
             res[point_usize] = F::one();
             return res;
         }
