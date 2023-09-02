@@ -9,7 +9,8 @@ use std::{
 
 use ark_ec::Group;
 use ark_ff::{
-    batch_inversion_and_mul, field_hashers::HashToField, FftField, Field, One, PrimeField, Zero,
+    batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField, Field, One,
+    PrimeField, Zero,
 };
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, Polynomial};
 use ark_serialize::CanonicalSerialize;
@@ -21,14 +22,14 @@ struct PrecomputedLagrange<const N: usize, F: Field> {
     // l(x) = ∏(X-x_i)
     vanishing_polynomial: DensePolynomial<F>,
 
-    // ∑ l(x)/(X-x_i)
+    // l'(x) = ∑ l(x)/(X-x_i)
     vanishing_derivative: DensePolynomial<F>,
 
     // w_j = ∏_{m!=j}(x_j-x_m)^-1
     barycentric_weights: [F; N],
 }
 
-impl<const N: usize, F: FftField> PrecomputedLagrange<N, F> {
+impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
     fn new() -> Self {
         let domain = (0..N as u64).map(|x| F::from(x)).collect::<Vec<F>>();
         let vanishing = Self::compute_vanishing_polynomial(&domain);
@@ -80,15 +81,18 @@ impl<const N: usize, F: FftField> PrecomputedLagrange<N, F> {
     }
 
     /// Computes the b vector in IPA. When this vector is inner product'd by the evaluations in the domain,
-    /// the result is F(point)
+    /// the result is the evaluation F(point).
+    ///
+    /// b_i = l(point) / l'(x_i)(z-x_i)
     fn compute_barycentric_coefficients(&self, point: F) -> Vec<F> {
         if point < F::from(N as u64) {
             let mut res = vec![F::zero(); N];
-            //res[point as usize] = F::one();
+            //FIXME: THIS IS SO BAD OH MY GOD
+            let point_usize = point.into_bigint().to_bytes_le()[0] as usize;
+            res[point_usize] = F::one();
             return res;
         }
         let vanishing_eval = self.vanishing_polynomial.evaluate(&point);
-        //let mut res_poly = DensePolynomial::<F>::from_coefficients_slice(&[F::zero()]);
         let mut coeffs = Vec::new();
         (0..N as u64).into_iter().for_each(|i| {
             let f_i = F::from(i);
@@ -185,26 +189,6 @@ impl<const N: usize, F: FftField> IPAPreparedData<N, F> {
             .for_each(|(i, x)| data[i] = x);
         Self { data, max }
     }
-
-    /*
-    fn compute_b_vector(&self, index: usize, precompute: &PrecomputedLagrange<N, F>) -> Vec<F> {
-        let index_f = F::from(index as u64);
-        let universal_eval = precompute.vanishing_polynomial.evaluate(&index_f);
-        let mut res = Vec::new();
-        self.data.iter().for_each(|(x, _y)| {
-            if index == *x {
-                res.push(F::one());
-            } else {
-                let x_f = F::from(*x as u64);
-                let rhs = index_f - x_f;
-                let deriv_eval: F = precompute.vanishing_derivative.evaluate(&x_f);
-                res.push(universal_eval / (deriv_eval * rhs));
-            }
-        });
-
-        res
-    }
-    */
 }
 
 impl<const N: usize, F: FftField> VCPreparedData for IPAPreparedData<N, F> {
@@ -298,11 +282,12 @@ where
         let mut b = key
             .precompute
             .compute_barycentric_coefficients(G::ScalarField::from(index as u64));
-        let eval = if index > data.max {
+        let eval = if index <= data.max {
             data.data[index]
         } else {
             inner_product(&data.data, &b)
         };
+
         let mut gens = key.g[0..data.max + 1].to_vec();
         let mut data = data.data.to_vec();
 
@@ -525,7 +510,7 @@ mod tests {
     type IPAT = IPA<SIZE, G, Hasher>;
 
     #[test]
-    fn test_commit_poly() {
+    fn test_commit_evaluations() {
         let mut gens = [G::zero(); SIZE];
         (0..SIZE).for_each(|i| gens[i] = G::generator() * F::from(i as u64 + 1));
         let q = G::generator() * F::from(SIZE as u64 + 1);
@@ -559,5 +544,9 @@ mod tests {
         let index = thread_rng().gen_range(0..SIZE) as usize;
         let proof = IPAT::prove(&crs, &commit, index, &data).unwrap();
         assert!(IPAT::verify(&crs, &commit, &proof).unwrap());
+
+        let index_outside = SIZE * 2;
+        let proof_outside = IPAT::prove(&crs, &commit, index_outside, &data).unwrap();
+        assert!(IPAT::verify(&crs, &commit, &proof_outside).unwrap());
     }
 }
