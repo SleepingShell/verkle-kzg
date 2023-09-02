@@ -295,7 +295,49 @@ where
         index: usize,
         data: &Self::PreparedData,
     ) -> Result<Self::Proof, Self::Error> {
-        todo!()
+        let mut b = key
+            .precompute
+            .compute_barycentric_coefficients(G::ScalarField::from(index as u64));
+        let eval = if index > data.max {
+            data.data[index]
+        } else {
+            inner_product(&data.data, &b)
+        };
+        let mut gens = key.g[0..data.max + 1].to_vec();
+        let mut data = data.data.to_vec();
+
+        let hasher = D::new(&[]);
+        let mut l: Vec<G> = Vec::new();
+        let mut r: Vec<G> = Vec::new();
+        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
+
+        let q = key.q * ra;
+        while data.len() > 1 {
+            let (data_l, data_r) = split(data);
+            let (gens_l, gens_r) = split(gens);
+            let (b_l, b_r) = split(b);
+            let y_l = inner_product(&gens_r, &data_l) + q * inner_product(&data_l, &b_r);
+            let y_r = inner_product(&gens_l, &data_r) + q * inner_product(&data_r, &b_l);
+
+            l.push(y_l);
+            r.push(y_r);
+            ra = hasher.hash_to_field(
+                &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
+                1,
+            )[0];
+
+            data = vec_add_and_distribute(&data_l, &data_r, ra);
+            gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
+            b = vec_add_and_distribute(&b_r, &b_l, ra);
+        }
+
+        Ok(IPAProof {
+            l,
+            r,
+            tip: data[0],
+            x: index,
+            y: eval,
+        })
     }
 
     fn prove_all(
@@ -311,7 +353,40 @@ where
         commitment: &Self::Commitment,
         proof: &Self::Proof,
     ) -> Result<bool, Self::Error> {
-        todo!()
+        let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
+        let mut c = commitment.clone();
+        let mut b = key
+            .precompute
+            .compute_barycentric_coefficients(G::ScalarField::from(proof.x as u64));
+        let hasher = D::new(&[]);
+        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
+        let mut points_coeffs = vec![G::ScalarField::one()];
+        let q = key.q * ra;
+        c += q * proof.y;
+
+        for i in 0..proof.l.len() {
+            ra = hasher.hash_to_field(
+                &[
+                    serialize(&ra),
+                    serialize(&proof.l[i]),
+                    serialize(&proof.r[i]),
+                ]
+                .concat(),
+                1,
+            )[0];
+
+            c = proof.l[i] + c * ra + proof.r[i] * ra.square();
+            points_coeffs = points_coeffs
+                .into_iter()
+                .map(|x| vec![x * ra, x])
+                .flatten()
+                .collect() //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();ct();
+        }
+
+        let combined_point = inner_product(&gens, &points_coeffs);
+        let combined_b = inner_product(&b, &points_coeffs);
+
+        Ok(c == combined_point * proof.tip + q * (proof.tip * combined_b))
     }
 
     fn verify_batch(
@@ -401,178 +476,6 @@ where
         c == combined_point * proof.tip
     }
 }
-/*
-/// Commit to the dataset
-fn commit_data<G: Group, D: HashToField<G::ScalarField>>(
-    key: &IPAUniversalParams<G, D>,
-    data: &IPAPreparedData<G::ScalarField>,
-) -> IPACommitment<G> {
-    let max = data.max;
-    let gens = key.g[0..max + 1].to_vec();
-
-    data.data.iter().map(|(i, v)| gens[*i] * v).sum()
-}
-
-/// Generate a proof that the dataset is committed to a valid polynomial
-fn prove_data_commit<G: Group, D: HashToField<G::ScalarField>>(
-    key: &IPAUniversalParams<G, D>,
-    commitment: &IPACommitment<G>,
-    data: &IPAPreparedData<G::ScalarField>,
-) -> IPACommitProof<G> {
-    let max = data.max;
-    let mut data = data.evaluations();
-    let mut gens = key.g[0..max + 1].to_vec();
-    let mut l: Vec<G> = Vec::new();
-    let mut r: Vec<G> = Vec::new();
-
-    let hasher = D::new(&[]);
-    let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
-
-    while data.len() > 1 {
-        let (data_l, data_r) = split(data);
-        let (gens_l, gens_r) = split(gens);
-
-        let y_l = inner_product(&gens_r, &data_l);
-        let y_r = inner_product(&gens_l, &data_r);
-        l.push(y_l);
-        r.push(y_r);
-
-        ra = hasher.hash_to_field(
-            &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
-            1,
-        )[0];
-
-        data = vec_add_and_distribute(&data_l, &data_r, ra);
-        gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
-    }
-
-    IPACommitProof {
-        l: l,
-        r: r,
-        tip: data[0],
-    }
-}
-
-fn verify_data_commit<G: Group, D: HashToField<G::ScalarField>>(
-    key: &IPAUniversalParams<G, D>,
-    commitment: &IPACommitment<G>,
-    proof: &IPACommitProof<G>,
-) -> bool {
-    let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
-    let mut c = commitment.clone();
-    let hasher = D::new(&[]);
-    let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
-    let mut points_coeffs = vec![G::ScalarField::one()];
-
-    for i in 0..proof.l.len() {
-        ra = hasher.hash_to_field(
-            &[
-                serialize(&ra),
-                serialize(&proof.l[i]),
-                serialize(&proof.r[i]),
-            ]
-            .concat(),
-            1,
-        )[0];
-
-        c = proof.l[i] + c * ra + proof.r[i] * ra.square();
-        points_coeffs = points_coeffs
-            .into_iter()
-            .map(|x| vec![x * ra, x])
-            .flatten()
-            .collect();
-    }
-
-    let combined_point = inner_product(&gens, &points_coeffs);
-    c == combined_point * proof.tip
-}
-
-fn prove_eval<G: Group, D: HashToField<G::ScalarField>>(
-    key: &IPAUniversalParams<G, D>,
-    commitment: &IPACommitment<G>,
-    index: usize,
-    data: &IPAPreparedData<G::ScalarField>,
-) -> IPAProof<G> {
-    let mut x_pows = data.compute_b_vector(index);
-    let mut gens = key.g[0..data.max + 1].to_vec();
-    let mut data = data.expanded_data();
-    let y = data[index];
-
-    let hasher = D::new(&[]);
-
-    let mut l: Vec<G> = Vec::new();
-    let mut r: Vec<G> = Vec::new();
-    let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
-
-    let q = key.q * ra;
-    while data.len() > 1 {
-        let (data_l, data_r) = split(data);
-        let (gens_l, gens_r) = split(gens);
-        let (x_pows_l, x_pows_r) = split(x_pows);
-        let y_l = inner_product(&gens_r, &data_l) + q * inner_product(&data_l, &x_pows_r);
-        let y_r = inner_product(&gens_l, &data_r) + q * inner_product(&data_r, &x_pows_l);
-
-        l.push(y_l);
-        r.push(y_r);
-        ra = hasher.hash_to_field(
-            &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
-            1,
-        )[0];
-
-        data = vec_add_and_distribute(&data_l, &data_r, ra);
-        gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
-        x_pows = vec_add_and_distribute(&x_pows_r, &x_pows_l, ra);
-    }
-
-    IPAProof {
-        l,
-        r,
-        tip: data[0],
-        x: index,
-        y,
-    }
-}
-
-fn verify_eval<G: Group, D: HashToField<G::ScalarField>>(
-    key: &IPAUniversalParams<G, D>,
-    commitment: &IPACommitment<G>,
-    proof: &IPAProof<G>,
-) -> bool {
-    let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
-    let mut c = commitment.clone();
-    let mut x_pows = vec![G::ScalarField::zero(); gens.len()];
-    x_pows[proof.x] = G::ScalarField::one();
-    let hasher = D::new(&[]);
-    let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
-    let mut points_coeffs = vec![G::ScalarField::one()];
-    let q = key.q * ra;
-    c += q * proof.y;
-
-    for i in 0..proof.l.len() {
-        ra = hasher.hash_to_field(
-            &[
-                serialize(&ra),
-                serialize(&proof.l[i]),
-                serialize(&proof.r[i]),
-            ]
-            .concat(),
-            1,
-        )[0];
-
-        c = proof.l[i] + c * ra + proof.r[i] * ra.square();
-        points_coeffs = points_coeffs
-            .into_iter()
-            .map(|x| vec![x * ra, x])
-            .flatten()
-            .collect() //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();ct();
-    }
-
-    let combined_point = inner_product(&gens, &points_coeffs);
-    let combined_x_pow = inner_product(&x_pows, &points_coeffs);
-
-    c == combined_point * proof.tip + q * (proof.tip * combined_x_pow)
-}
-*/
 
 fn serialize<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
     let mut b = Vec::new();
@@ -641,22 +544,20 @@ mod tests {
         assert!(!IPAT::verify_commitment_proof(&crs, &commit, &proof));
     }
 
-    /*
     #[test]
     fn test_eval_proof() {
-        let size: u64 = 32;
-        let gens: Vec<G> = (0..size).map(|i| G::generator() * F::from(i + 1)).collect();
-        let q = G::generator() * F::from(size + 1);
+        let mut gens = [G::zero(); SIZE];
+        (0..SIZE).for_each(|i| gens[i] = G::generator() * F::from(i as u64 + 1));
+        let q = G::generator() * F::from(SIZE as u64 + 1);
 
-        let data_raw: Vec<F> = (0..size).map(|i| F::from(i)).collect();
+        let data_raw: Vec<F> = (0..SIZE as u64).map(|i| F::from(i)).collect();
 
-        let crs = IPAUniversalParams::<G, Hasher>::new(gens, q);
-        let data = IPAPreparedData::<F>::new_incremental(data_raw);
-        let commit = commit_data(&crs, &data);
+        let crs = IPAUniversalParams::<SIZE, G, Hasher>::new(gens, q);
+        let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
+        let mut commit = IPAT::commit(&crs, &data).unwrap();
 
-        let index = thread_rng().gen_range(0..size) as usize;
-        let e_proof = prove_eval(&crs, &commit, index, &data);
-        assert!(verify_eval(&crs, &commit, &e_proof));
+        let index = thread_rng().gen_range(0..SIZE) as usize;
+        let proof = IPAT::prove(&crs, &commit, index, &data).unwrap();
+        assert!(IPAT::verify(&crs, &commit, &proof).unwrap());
     }
-    */
 }
