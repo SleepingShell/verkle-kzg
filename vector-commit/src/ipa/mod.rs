@@ -7,7 +7,7 @@ use std::{
     ops::{Add, Mul},
 };
 
-use ark_ec::Group;
+use ark_ec::{CurveGroup, Group};
 use ark_ff::{
     batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField, Field, One,
     PrimeField, Zero,
@@ -16,10 +16,14 @@ use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, Polynomial};
 use ark_serialize::CanonicalSerialize;
 use thiserror::Error;
 
-use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
+use crate::{
+    PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams, VectorCommitment,
+};
 
 mod ipa_point_generator;
 pub use ipa_point_generator::IPAPointGenerator;
+
+use self::ipa_point_generator::EthereumHashToCurve;
 
 /// Precomputed barycentric elements in a domain of size `N`.
 struct PrecomputedLagrange<const N: usize, F: Field> {
@@ -127,6 +131,19 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> IPAUniversalParam
         Self {
             g,
             q,
+            precompute: PrecomputedLagrange::new(),
+            digest: PhantomData,
+        }
+    }
+
+    fn new_from_vec(all: Vec<G>) -> Self {
+        let mut real_g = [G::zero(); N];
+        for i in 0..N {
+            real_g[i] = all[i];
+        }
+        Self {
+            g: real_g,
+            q: all[N],
             precompute: PrecomputedLagrange::new(),
             digest: PhantomData,
         }
@@ -240,7 +257,7 @@ pub struct IPA<const N: usize, G, D> {
 
 impl<const N: usize, G, D> VectorCommitment for IPA<N, G, D>
 where
-    G: Group,
+    G: CurveGroup,
     D: HashToField<G::ScalarField>,
 {
     type UniversalParams = IPAUniversalParams<N, G, D>;
@@ -249,13 +266,18 @@ where
     type Proof = IPAProof<G>;
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
-    type PointGenerator = IPAPointGenerator<G, D>;
+    type PointGenerator = IPAPointGenerator<G, EthereumHashToCurve>;
 
     fn setup(
         max_items: usize,
         gen: &Self::PointGenerator,
     ) -> Result<Self::UniversalParams, crate::PointGeneratorError> {
-        todo!()
+        let gens = gen
+            .gen(max_items + 1)
+            .map_err(|_| PointGeneratorError::InvalidPoint)?;
+
+        // TODO: Perhaps the PointGenerator should also have a generic bound on its max size
+        Ok(Self::UniversalParams::new_from_vec(gens))
     }
 
     fn commit(
@@ -522,7 +544,8 @@ mod tests {
 
         let data_raw: Vec<F> = (0..SIZE as u64).map(|i| F::from(i)).collect();
 
-        let crs = IPAUniversalParams::<SIZE, G, Hasher>::new(gens, q);
+        let point_gen = IPAPointGenerator::default();
+        let crs = IPAT::setup(SIZE, &point_gen).unwrap();
         let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
 
         let mut commit = IPAT::commit(&crs, &data).unwrap();
@@ -542,7 +565,8 @@ mod tests {
 
         let data_raw: Vec<F> = (0..SIZE as u64).map(|i| F::from(i)).collect();
 
-        let crs = IPAUniversalParams::<SIZE, G, Hasher>::new(gens, q);
+        let point_gen = IPAPointGenerator::default();
+        let crs = IPAT::setup(SIZE, &point_gen).unwrap();
         let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
         let mut commit = IPAT::commit(&crs, &data).unwrap();
 

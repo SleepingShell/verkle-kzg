@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
-use ark_ec::{hashing::HashToCurve, CurveGroup, Group};
+use ark_ec::{
+    hashing::{HashToCurve, HashToCurveError},
+    AffineRepr, CurveGroup, Group,
+};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use digest::Digest;
 use num::traits::ToBytes;
@@ -47,13 +50,13 @@ impl<G: CurveGroup, H: HashToCurve<G>> PointGenerator for IPAPointGenerator<G, H
         }
         let hasher = H::new(&self.seed).unwrap();
         let mut res: Vec<G> = Vec::with_capacity(num);
-        for i in 0..num {
-            res.push(
-                hasher
-                    .hash(&i.to_le_bytes())
-                    .map_err(|_| PointGeneratorError::InvalidPoint)?
-                    .into(),
-            );
+        let mut i = 0usize;
+        while res.len() < num {
+            if let Ok(point) = hasher.hash(&i.to_le_bytes()) {
+                res.push(point.into());
+            }
+
+            i += 1;
         }
 
         Ok(res)
@@ -72,5 +75,31 @@ impl<G: CurveGroup, H: HashToCurve<G>> PointGenerator for IPAPointGenerator<G, H
 
     fn secret(&self) -> Option<Self::Secret> {
         Some(self.seed.clone())
+    }
+}
+
+pub struct EthereumHashToCurve {
+    domain: Vec<u8>,
+}
+
+impl<G: CurveGroup> HashToCurve<G> for EthereumHashToCurve {
+    fn new(domain: &[u8]) -> Result<Self, ark_ec::hashing::HashToCurveError> {
+        Ok(Self {
+            domain: domain.to_vec(),
+        })
+    }
+
+    fn hash(
+        &self,
+        message: &[u8],
+    ) -> Result<<G as CurveGroup>::Affine, ark_ec::hashing::HashToCurveError> {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.domain);
+        hasher.update(message);
+        let bytes = hasher.finalize();
+        let point = <G::Affine as AffineRepr>::from_random_bytes(&bytes);
+        point.ok_or(HashToCurveError::MapToCurveError(
+            "Invalid point".to_owned(),
+        ))
     }
 }

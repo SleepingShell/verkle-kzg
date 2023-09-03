@@ -121,7 +121,7 @@ pub enum PointGeneratorError {
     InvalidPoint,
 }
 
-trait PointGenerator {
+pub trait PointGenerator {
     type Point;
     type Secret;
 
