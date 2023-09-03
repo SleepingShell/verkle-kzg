@@ -7,7 +7,12 @@ use ark_poly::{
     GeneralEvaluationDomain, Polynomial,
 };
 
-use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
+use crate::{
+    PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams, VectorCommitment,
+};
+
+mod kzg_point_generator;
+pub use kzg_point_generator::KZGRandomPointGenerator;
 
 /// KZGKey represents the universal parameters, AKA reference string, for both
 /// committing polynomials and verifying commitments
@@ -45,7 +50,7 @@ where
             degree: max_degree,
             ref_string_g1: vec![],
             g2_secret: g2 * secret,
-            lagrange_commitments: vec![], //TODO
+            lagrange_commitments: vec![],
             domain: domain,
         };
         params.ref_string_g1.push(g1);
@@ -57,6 +62,21 @@ where
         //params.lagrange_commitments = domain.evaluate_all_lagrange_coefficients(secret).iter().map(|l| g1 * l).collect();
         params.lagrange_commitments = domain.ifft(&params.ref_string_g1);
 
+        params
+    }
+
+    fn new_from_vec(g1: Vec<G1>, g2: G2) -> Self {
+        let max = g1.len();
+        let domain = GeneralEvaluationDomain::<F>::new(max).unwrap();
+        let mut params: Self = Self {
+            degree: max,
+            ref_string_g1: g1,
+            g2_secret: g2,
+            lagrange_commitments: vec![], //TODO
+            domain,
+        };
+
+        params.lagrange_commitments = domain.ifft(&params.ref_string_g1);
         params
     }
 
@@ -287,13 +307,15 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E> {
     type Proof = KZGProof<E::ScalarField, E::G1>;
     type BatchProof = KZGBatchProof<E::ScalarField, E::G1>;
     type Error = KZGError;
+    type PointGenerator = KZGRandomPointGenerator<E::G1>;
 
-    fn setup<R: rand::RngCore>(
+    fn setup(
         max_items: usize,
-        rng: &mut R,
-    ) -> Result<Self::UniversalParams, Self::Error> {
-        let secret = <E::ScalarField as UniformRand>::rand(rng);
-        Ok(KZGKey::new_from_secret(secret, max_items))
+        gen: &Self::PointGenerator,
+    ) -> Result<Self::UniversalParams, PointGeneratorError> {
+        let points = gen.gen(max_items)?;
+        let g2 = E::G2::generator() * gen.secret().unwrap();
+        Ok(KZGKey::new_from_vec(points, g2))
     }
 
     fn commit(
@@ -481,7 +503,9 @@ mod tests {
     fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1, G2>) {
         let data = gen_data(n);
         //let prep = KZGPreparedData::from_iter(data);
-        let crs = KZG::setup(max_degree, &mut rand::thread_rng()).unwrap();
+        let point_gen = KZGRandomPointGenerator::default();
+
+        let crs = KZG::setup(max_degree, &point_gen).unwrap();
         let prep = KZGPreparedData::from_points_and_domain(data, crs.domain);
 
         (prep, crs)

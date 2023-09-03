@@ -10,9 +10,11 @@ use std::{error::Error, fmt::Debug};
 
 use ark_ff::{PrimeField, Zero};
 use rand::RngCore;
+use thiserror::Error;
 
 pub mod ipa;
-pub mod kzg_amortized;
+pub mod kzg;
+mod transcript;
 
 /// The proving and verification parameters for the VC scheme
 pub trait VCUniversalParams {
@@ -58,12 +60,15 @@ pub trait VectorCommitment {
     /// The error type for the scheme.
     type Error: Error + Debug;
 
+    /// The type that will generate the CRS points of the scheme
+    type PointGenerator;
+
     /// Constructs the Universal parameters for the scheme, which allows committing
     /// and proving inclusion of vectors up to `max_items` items
-    fn setup<R: RngCore>(
+    fn setup(
         max_items: usize,
-        rng: &mut R,
-    ) -> Result<Self::UniversalParams, Self::Error>;
+        gen: &Self::PointGenerator,
+    ) -> Result<Self::UniversalParams, PointGeneratorError>;
 
     /// Commit a prepared data vector (`data`) to the `key` UniversalParams.
     fn commit(
@@ -106,4 +111,21 @@ pub trait VectorCommitment {
     fn convert_commitment_to_data(
         commit: &Self::Commitment,
     ) -> <Self::PreparedData as VCPreparedData>::Item;
+}
+
+#[derive(Error, Debug)]
+pub enum PointGeneratorError {
+    #[error("Attempted to create generator outside of max allowed")]
+    OutOfBounds,
+    #[error("Attempt to serialize bytes into a non-exsistent point")]
+    InvalidPoint,
+}
+
+trait PointGenerator {
+    type Point;
+    type Secret;
+
+    fn gen(&self, num: usize) -> Result<Vec<Self::Point>, PointGeneratorError>;
+    fn gen_at(&self, index: usize) -> Result<Self::Point, PointGeneratorError>;
+    fn secret(&self) -> Option<Self::Secret>;
 }

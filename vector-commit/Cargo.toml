@@ -18,12 +18,17 @@ num = "0.4.1"
 rand = "0.8.5"
 digest = "0.10.7"
 sha2 = "0.10.7"
+thiserror = "1.0.48"
 
 [dev-dependencies]
 criterion = "0.5"
 
 [[bench]]
-name = "proofs"
+name = "kzg"
+harness = false
+
+[[bench]]
+name = "ipa"
 harness = false
 
 [profile.release]

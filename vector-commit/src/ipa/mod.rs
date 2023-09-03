@@ -14,8 +14,12 @@ use ark_ff::{
 };
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, Polynomial};
 use ark_serialize::CanonicalSerialize;
+use thiserror::Error;
 
 use crate::{VCPreparedData, VCUniversalParams, VectorCommitment};
+
+mod ipa_point_generator;
+pub use ipa_point_generator::IPAPointGenerator;
 
 /// Precomputed barycentric elements in a domain of size `N`.
 struct PrecomputedLagrange<const N: usize, F: Field> {
@@ -110,7 +114,7 @@ impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
     }
 }
 
-struct IPAUniversalParams<const N: usize, G: Group, D: HashToField<G::ScalarField>> {
+pub struct IPAUniversalParams<const N: usize, G: Group, D: HashToField<G::ScalarField>> {
     g: [G; N], // Gens to commit the evaluations of the dataset
     q: G,      // Gen to commit to the inner product of the dataset with it's b vector
     precompute: PrecomputedLagrange<N, G::ScalarField>,
@@ -138,15 +142,15 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> VCUniversalParams
 }
 
 /// A commitment to the set of data
-type IPACommitment<G: Group> = G;
+pub type IPACommitment<G: Group> = G;
 
-struct IPACommitProof<G: Group> {
+pub struct IPACommitProof<G: Group> {
     l: Vec<G>,
     r: Vec<G>,
     tip: G::ScalarField,
 }
 
-struct IPAProof<G: Group> {
+pub struct IPAProof<G: Group> {
     l: Vec<G>,
     r: Vec<G>,
     tip: G::ScalarField,
@@ -154,21 +158,16 @@ struct IPAProof<G: Group> {
     y: G::ScalarField,
 }
 
-#[derive(Clone, Debug)]
-enum IPAError {
+#[derive(Error, Clone, Debug)]
+pub enum IPAError {
+    #[error("Attempting to use an in-domain function outside of the domain")]
     OutOfDomain,
+
+    #[error("Attempting to create an IPA commitment greater than the CRS size")]
     OutOfCRS,
 }
 
-impl Display for IPAError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", "")
-    }
-}
-
-impl Error for IPAError {}
-
-struct IPAPreparedData<const N: usize, F: Field> {
+pub struct IPAPreparedData<const N: usize, F: Field> {
     data: [F; N],
 
     // The highest x value that this dataset contains
@@ -177,7 +176,7 @@ struct IPAPreparedData<const N: usize, F: Field> {
 
 impl<const N: usize, F: FftField> IPAPreparedData<N, F> {
     /// An ORDERED list of evaluation points
-    fn new(data_list: Vec<(usize, F)>) -> Self {
+    pub fn new(data_list: Vec<(usize, F)>) -> Self {
         let max = data_list[data_list.len() - 1].0;
         let mut data = [F::zero(); N];
         data_list.into_iter().for_each(|(i, x)| data[i] = x);
@@ -185,7 +184,7 @@ impl<const N: usize, F: FftField> IPAPreparedData<N, F> {
     }
 
     /// The data domain is simply at 0..length-1
-    fn new_incremental(data_list: Vec<F>) -> Self {
+    pub fn new_incremental(data_list: Vec<F>) -> Self {
         let max = data_list.len() - 1;
         let mut data = [F::zero(); N];
         data_list
@@ -234,7 +233,7 @@ impl<const N: usize, F: FftField> VCPreparedData for IPAPreparedData<N, F> {
     }
 }
 
-struct IPA<const N: usize, G, D> {
+pub struct IPA<const N: usize, G, D> {
     _g: PhantomData<G>,
     _d: PhantomData<D>,
 }
@@ -250,11 +249,12 @@ where
     type Proof = IPAProof<G>;
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
+    type PointGenerator = IPAPointGenerator<G, D>;
 
-    fn setup<R: rand::RngCore>(
+    fn setup(
         max_items: usize,
-        rng: &mut R,
-    ) -> Result<Self::UniversalParams, Self::Error> {
+        gen: &Self::PointGenerator,
+    ) -> Result<Self::UniversalParams, crate::PointGeneratorError> {
         todo!()
     }
 

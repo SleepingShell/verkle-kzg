@@ -1,5 +1,5 @@
 use rand::Rng;
-use vector_commit::{kzg_amortized::*, VectorCommitment};
+use vector_commit::{kzg::*, VectorCommitment};
 
 use ark_bn254::Bn254;
 use ark_ec::pairing::Pairing;
@@ -25,7 +25,9 @@ fn gen_data(num: usize) -> Vec<F> {
 
 fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1, G2>) {
     let data = gen_data(n);
-    let crs = KZG::setup(max_degree, &mut rand::thread_rng()).unwrap();
+    let point_gen = KZGRandomPointGenerator::default();
+
+    let crs = KZG::setup(max_degree, &point_gen).unwrap();
     let prep = KZGPreparedData::from_points_and_domain(data, crs.domain());
 
     (prep, crs)
@@ -34,13 +36,14 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1, G2>)
 fn bench_setup(c: &mut Criterion) {
     let base = 32;
     let rng = &mut rand::thread_rng();
+    let point_gen = KZGRandomPointGenerator::default();
 
     let mut group = c.benchmark_group("CRS setup");
     group.sample_size(10);
     for size in [base, base * 64, base * 128, base * 512].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            b.iter(|| KZG::setup(size, rng));
+            b.iter(|| KZG::setup(size, &point_gen));
         });
     }
 
