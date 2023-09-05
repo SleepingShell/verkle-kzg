@@ -17,6 +17,7 @@ use ark_serialize::CanonicalSerialize;
 use thiserror::Error;
 
 use crate::{
+    transcript::{Transcript, TranscriptError},
     PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams, VectorCommitment,
 };
 
@@ -182,6 +183,9 @@ pub enum IPAError {
 
     #[error("Attempting to create an IPA commitment greater than the CRS size")]
     OutOfCRS,
+
+    #[error("Transcript error")]
+    TranscriptError(#[from] TranscriptError),
 }
 
 pub struct IPAPreparedData<const N: usize, F: Field> {
@@ -314,11 +318,15 @@ where
 
         let mut gens = key.g[0..data.max + 1].to_vec();
         let mut data = data.data.to_vec();
+        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        transcript.append(commitment, "C")?;
+        transcript.append(&G::ScalarField::from(index as u64), "input point")?;
+        transcript.append(&eval, "output point")?;
 
-        let hasher = D::new(&[]);
+        //let hasher = D::new(&[]);
         let mut l: Vec<G> = Vec::new();
         let mut r: Vec<G> = Vec::new();
-        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
+        let mut ra = transcript.hash("w", true);
 
         let q = key.q * ra;
         while data.len() > 1 {
@@ -330,10 +338,9 @@ where
 
             l.push(y_l);
             r.push(y_r);
-            ra = hasher.hash_to_field(
-                &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
-                1,
-            )[0];
+            transcript.append(&y_l, "L")?;
+            transcript.append(&y_r, "R")?;
+            ra = transcript.hash("x", true);
 
             data = vec_add_and_distribute(&data_l, &data_r, ra);
             gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
@@ -367,29 +374,26 @@ where
         let mut b = key
             .precompute
             .compute_barycentric_coefficients(G::ScalarField::from(proof.x as u64));
-        let hasher = D::new(&[]);
-        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
+        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        transcript.append(commitment, "C")?;
+        transcript.append(&G::ScalarField::from(proof.x as u64), "input point")?;
+        transcript.append(&proof.y, "output point")?;
+        let mut ra = transcript.hash("w", true);
         let mut points_coeffs = vec![G::ScalarField::one()];
         let q = key.q * ra;
         c += q * proof.y;
 
         for i in 0..proof.l.len() {
-            ra = hasher.hash_to_field(
-                &[
-                    serialize(&ra),
-                    serialize(&proof.l[i]),
-                    serialize(&proof.r[i]),
-                ]
-                .concat(),
-                1,
-            )[0];
+            transcript.append(&proof.l[i], "L")?;
+            transcript.append(&proof.r[i], "R")?;
+            ra = transcript.hash("x", true);
 
             c = proof.l[i] + c * ra + proof.r[i] * ra.square();
             points_coeffs = points_coeffs
                 .into_iter()
                 .map(|x| vec![x * ra, x])
                 .flatten()
-                .collect() //let coeffs: Vec<F> = (0..size).map(|i| F::from(i)).collect();ct();
+                .collect();
         }
 
         let combined_point = inner_product(&gens, &points_coeffs);
@@ -423,8 +427,9 @@ where
         let mut l = Vec::<G>::new();
         let mut r = Vec::<G>::new();
 
-        let hasher = D::new(&[]);
-        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
+        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        transcript.append(commitment, "C");
+        let mut ra = transcript.hash("x", true);
 
         while data.len() > 1 {
             let (data_l, data_r) = split(data);
@@ -435,10 +440,9 @@ where
             l.push(y_l);
             r.push(y_r);
 
-            ra = hasher.hash_to_field(
-                &[serialize(&ra), serialize(&y_l), serialize(&y_r)].concat(),
-                1,
-            )[0];
+            transcript.append(&y_l, "L");
+            transcript.append(&y_r, "R");
+            ra = transcript.hash("x", true);
 
             data = vec_add_and_distribute(&data_l, &data_r, ra);
             gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
@@ -458,20 +462,15 @@ where
     ) -> bool {
         let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
         let mut c = commitment.clone();
-        let hasher = D::new(&[]);
-        let mut ra = hasher.hash_to_field(&serialize(commitment), 1)[0];
         let mut points_coeffs = vec![G::ScalarField::one()];
+        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        transcript.append(commitment, "C");
+        let mut ra = transcript.hash("x", true);
 
         for i in 0..proof.l.len() {
-            ra = hasher.hash_to_field(
-                &[
-                    serialize(&ra),
-                    serialize(&proof.l[i]),
-                    serialize(&proof.r[i]),
-                ]
-                .concat(),
-                1,
-            )[0];
+            transcript.append(&proof.l[i], "L");
+            transcript.append(&proof.r[i], "R");
+            ra = transcript.hash("x", true);
 
             c = proof.l[i] + c * ra + proof.r[i] * ra.square();
             points_coeffs = points_coeffs
