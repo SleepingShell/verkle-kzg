@@ -38,7 +38,7 @@ fn bench_setup(c: &mut Criterion) {
     let rng = &mut rand::thread_rng();
     let point_gen = KZGRandomPointGenerator::default();
 
-    let mut group = c.benchmark_group("CRS setup");
+    let mut group = c.benchmark_group("kzg_crs_setup");
     group.sample_size(10);
     for size in [base, base * 64, base * 128, base * 512].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
@@ -53,14 +53,14 @@ fn bench_setup(c: &mut Criterion) {
 fn bench_data_commitment(c: &mut Criterion) {
     let (data, crs) = setup(DATA_SIZE, MAX_CRS);
 
-    c.bench_function("commitment", |b| b.iter(|| KZG::commit(&crs, &data)));
+    c.bench_function("kzg_commitment", |b| b.iter(|| KZG::commit(&crs, &data)));
 }
 
 fn bench_single_proof(c: &mut Criterion) {
     let (data, crs) = setup(DATA_SIZE, MAX_CRS);
     let commit = KZG::commit(&crs, &data).unwrap();
     let mut rng = rand::thread_rng();
-    c.bench_function("single proof", |b| {
+    c.bench_function("kzg_single_proof", |b| {
         b.iter(|| KZG::prove(&crs, &commit, rng.gen_range(0..DATA_SIZE), &data))
     });
 }
@@ -68,7 +68,7 @@ fn bench_single_proof(c: &mut Criterion) {
 fn bench_multi_proof(c: &mut Criterion) {
     let (data, crs) = setup(DATA_SIZE, MAX_CRS);
     let commit = KZG::commit(&crs, &data).unwrap();
-    c.bench_function("multi proof", |b| {
+    c.bench_function("kzg_all_proof", |b| {
         b.iter(|| KZG::prove_all(&crs, &commit, &data))
     });
 }

@@ -27,6 +27,10 @@ impl<G, H> IPAPointGenerator<G, H> {
             _h: PhantomData,
         }
     }
+
+    pub fn set_max(&mut self, max: usize) {
+        self.max = max;
+    }
 }
 
 impl<G, H> Default for IPAPointGenerator<G, H> {

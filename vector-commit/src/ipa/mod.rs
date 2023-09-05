@@ -272,10 +272,7 @@ where
         max_items: usize,
         gen: &Self::PointGenerator,
     ) -> Result<Self::UniversalParams, crate::PointGeneratorError> {
-        let gens = gen
-            .gen(max_items + 1)
-            .map_err(|_| PointGeneratorError::InvalidPoint)?;
-
+        let gens = gen.gen(max_items + 1)?;
         // TODO: Perhaps the PointGenerator should also have a generic bound on its max size
         Ok(Self::UniversalParams::new_from_vec(gens))
     }
@@ -497,7 +494,8 @@ fn serialize<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
 }
 
 fn inner_product<R: Copy, T: Mul<R, Output = T> + Sum<T> + Copy>(a: &[T], b: &[R]) -> T {
-    a.iter().zip(b.iter()).map(|(a, b)| *a * *b).sum()
+    //a.iter().zip(b.iter()).map(|(a, b)| *a * *b).sum()
+    b.iter().enumerate().map(|(i, r)| a[i] * *r).sum()
 }
 
 //res_i = a_i + x*b_i
