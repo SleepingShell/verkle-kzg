@@ -308,6 +308,7 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E> {
     type BatchProof = KZGBatchProof<E::ScalarField, E::G1>;
     type Error = KZGError;
     type PointGenerator = KZGRandomPointGenerator<E::G1>;
+    type MultiProof = KZGBatchProof<E::ScalarField, E::G1>;
 
     fn setup(
         max_items: usize,
@@ -342,17 +343,32 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E> {
         })
     }
 
-    fn prove_all(
+    /// Generate all proofs of the dataset using the Feist-Khovratovich techique
+    fn prove_batch(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        indexes: Vec<usize>,
         data: &Self::PreparedData,
     ) -> Result<Self::BatchProof, Self::Error> {
         Self::get_all_proofs(&key, &data)
     }
 
+    fn prove_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[crate::MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+    ) -> Result<Self::MultiProof, Self::Error> {
+        todo!()
+    }
+
     fn verify(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        index: usize,
         proof: &Self::Proof,
     ) -> Result<bool, Self::Error> {
         // TODO: Need to be able to access domain's root of unity to be able to evaluate properly
@@ -387,6 +403,19 @@ impl<E: Pairing> VectorCommitment for KZGAmortized<E> {
         }
 
         Ok(true)
+    }
+
+    fn verify_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[crate::MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+        proof: &Self::MultiProof,
+    ) -> Result<bool, Self::Error> {
+        todo!()
     }
 
     fn convert_commitment_to_data(
@@ -518,7 +547,7 @@ mod tests {
 
         for i in 0..DATA_SIZE {
             let proof = KZG::prove(&crs, &commit, i, &data).unwrap();
-            assert!(KZG::verify(&crs, &commit, &proof).unwrap());
+            assert!(KZG::verify(&crs, &commit, 0, &proof).unwrap());
         }
     }
 
@@ -527,7 +556,7 @@ mod tests {
         let (data, crs) = setup(DATA_SIZE, MAX_CRS);
         let commit = KZG::commit(&crs, &data).unwrap();
 
-        let proofs = KZG::prove_all(&crs, &commit, &data).unwrap();
+        let proofs = KZG::prove_batch(&crs, &commit, (0..DATA_SIZE).collect(), &data).unwrap();
         assert!(KZG::verify_batch(&crs, &commit, &proofs).unwrap());
     }
 

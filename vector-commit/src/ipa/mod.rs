@@ -17,8 +17,9 @@ use ark_serialize::CanonicalSerialize;
 use thiserror::Error;
 
 use crate::{
-    transcript::{Transcript, TranscriptError},
-    PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams, VectorCommitment,
+    transcript::{self, Transcript, TranscriptError},
+    MultiProofQuery, PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams,
+    VectorCommitment,
 };
 
 mod ipa_point_generator;
@@ -28,10 +29,10 @@ use self::ipa_point_generator::EthereumHashToCurve;
 
 /// Precomputed barycentric elements in a domain of size `N`.
 struct PrecomputedLagrange<const N: usize, F: Field> {
-    // l(x) = ∏(X-x_i)
+    // l(x) = ∏(X-x_i) AKA A(x)
     vanishing_polynomial: DensePolynomial<F>,
 
-    // l'(x) = ∑ l(x)/(X-x_i)
+    // l'(x) = ∑ l(x)/(X-x_i) AKA A'(x)
     vanishing_derivative: DensePolynomial<F>,
 
     // w_j = ∏_{m!=j}(x_j-x_m)^-1
@@ -172,8 +173,12 @@ pub struct IPAProof<G: Group> {
     l: Vec<G>,
     r: Vec<G>,
     tip: G::ScalarField,
-    x: usize,
     y: G::ScalarField,
+}
+
+pub struct IPAMultiProof<G: Group> {
+    ipa: IPAProof<G>,
+    d: G,
 }
 
 #[derive(Error, Clone, Debug)]
@@ -188,6 +193,7 @@ pub enum IPAError {
     TranscriptError(#[from] TranscriptError),
 }
 
+#[derive(Clone)]
 pub struct IPAPreparedData<const N: usize, F: Field> {
     data: [F; N],
 
@@ -195,7 +201,7 @@ pub struct IPAPreparedData<const N: usize, F: Field> {
     max: usize,
 }
 
-impl<const N: usize, F: FftField> IPAPreparedData<N, F> {
+impl<const N: usize, F: PrimeField> IPAPreparedData<N, F> {
     /// An ORDERED list of evaluation points
     pub fn new(data_list: Vec<(usize, F)>) -> Self {
         let max = data_list[data_list.len() - 1].0;
@@ -214,9 +220,48 @@ impl<const N: usize, F: FftField> IPAPreparedData<N, F> {
             .for_each(|(i, x)| data[i] = x);
         Self { data, max }
     }
+
+    /// Evaluate both inside and outside the domain
+    fn evaluate(&self, precompute: &PrecomputedLagrange<N, F>, index: usize) -> F {
+        match self.get(index) {
+            Some(res) => *res,
+            None => inner_product(
+                &precompute.compute_barycentric_coefficients(F::from(index as u64)),
+                &self.data,
+            ),
+        }
+    }
+
+    /// Compute the quotient polynomial q(x) = [f(X) - f(x_i)] / [X-x_i]
+    fn divide_by_vanishing(&self, precompute: &PrecomputedLagrange<N, F>, index: usize) -> Vec<F> {
+        let mut q = vec![F::zero(); N];
+        let index_f = F::from(index as u64);
+        let eval = self.data[index];
+
+        for i in 0..N {
+            if i == index {
+                continue;
+            }
+
+            let denom = F::from(i as u64) - index_f;
+
+            let sub = self.data[i] - eval;
+            q[i] = sub * denom.inverse().unwrap();
+            q[index] += sub
+                * denom
+                * precompute.vanishing_derivative.evaluate(&index_f)
+                * precompute
+                    .vanishing_derivative
+                    .evaluate(&F::from(i as u64))
+                    .inverse()
+                    .unwrap();
+        }
+
+        q
+    }
 }
 
-impl<const N: usize, F: FftField> VCPreparedData for IPAPreparedData<N, F> {
+impl<const N: usize, F: PrimeField> VCPreparedData for IPAPreparedData<N, F> {
     type Item = F;
     type Error = IPAError;
 
@@ -236,7 +281,7 @@ impl<const N: usize, F: FftField> VCPreparedData for IPAPreparedData<N, F> {
         self.data
             .into_iter()
             .enumerate()
-            .filter(|(i, x)| *x != F::zero())
+            .filter(|(_i, x)| *x != F::zero())
             .collect()
     }
 
@@ -271,6 +316,7 @@ where
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
     type PointGenerator = IPAPointGenerator<G, EthereumHashToCurve>;
+    type MultiProof = IPAMultiProof<G>;
 
     fn setup(
         max_items: usize,
@@ -310,96 +356,110 @@ where
         let mut b = key
             .precompute
             .compute_barycentric_coefficients(G::ScalarField::from(index as u64));
-        let eval = if index <= data.max {
-            data.data[index]
-        } else {
-            inner_product(&data.data, &b)
-        };
-
-        let mut gens = key.g[0..data.max + 1].to_vec();
-        let mut data = data.data.to_vec();
-        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
-        transcript.append(commitment, "C")?;
-        transcript.append(&G::ScalarField::from(index as u64), "input point")?;
-        transcript.append(&eval, "output point")?;
-
-        //let hasher = D::new(&[]);
-        let mut l: Vec<G> = Vec::new();
-        let mut r: Vec<G> = Vec::new();
-        let mut ra = transcript.hash("w", true);
-
-        let q = key.q * ra;
-        while data.len() > 1 {
-            let (data_l, data_r) = split(data);
-            let (gens_l, gens_r) = split(gens);
-            let (b_l, b_r) = split(b);
-            let y_l = inner_product(&gens_r, &data_l) + q * inner_product(&data_l, &b_r);
-            let y_r = inner_product(&gens_l, &data_r) + q * inner_product(&data_r, &b_l);
-
-            l.push(y_l);
-            r.push(y_r);
-            transcript.append(&y_l, "L")?;
-            transcript.append(&y_r, "R")?;
-            ra = transcript.hash("x", true);
-
-            data = vec_add_and_distribute(&data_l, &data_r, ra);
-            gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
-            b = vec_add_and_distribute(&b_r, &b_l, ra);
-        }
-
-        Ok(IPAProof {
-            l,
-            r,
-            tip: data[0],
-            x: index,
-            y: eval,
-        })
+        low_level_ipa::<G, G::ScalarField, D>(
+            &key.g,
+            &key.q,
+            &data.data,
+            &b,
+            commitment,
+            G::ScalarField::from(index as u64),
+            None,
+        )
     }
 
-    fn prove_all(
+    fn prove_batch(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        indexes: Vec<usize>,
         data: &Self::PreparedData,
     ) -> Result<Self::BatchProof, Self::Error> {
         todo!()
     }
 
+    fn prove_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+    ) -> Result<Self::MultiProof, Self::Error> {
+        let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
+        for query in queries {
+            transcript.append(query.commit, "C");
+            transcript.append(&query.z, "z");
+            transcript.append(&query.y, "y");
+        }
+
+        let r = transcript.hash("r", true);
+        let mut r_pow = G::ScalarField::one();
+
+        let mut g = [G::ScalarField::zero(); N];
+        for query in queries {
+            let quotient = query.data.divide_by_vanishing(&key.precompute, query.z);
+            for i in 0..N {
+                g[i] += r_pow * quotient[i];
+            }
+            r_pow *= r;
+        }
+
+        // Commitment to g(x)
+        let d = inner_product(&key.g, &g);
+        transcript.append(&d, "D");
+
+        let t = transcript.hash("t", true);
+        r_pow = G::ScalarField::one();
+
+        let mut h = [G::ScalarField::zero(); N];
+        for query in queries {
+            let denom = (t - G::ScalarField::from(query.z as u64))
+                .inverse()
+                .unwrap();
+            for i in 0..N {
+                h[i] += r_pow * query.data.data[i] * denom;
+            }
+            r_pow *= r;
+        }
+
+        let e = inner_product(&key.g, &h);
+        transcript.append(&e, "E");
+
+        let h_minus_g: Vec<G::ScalarField> = g
+            .into_iter()
+            .zip(h.into_iter())
+            .map(|(g_i, h_i)| h_i - g_i)
+            .collect();
+
+        let multiproof_commit = e - d;
+        let proof = low_level_ipa::<G, G::ScalarField, D>(
+            &key.g,
+            &key.q,
+            &h_minus_g,
+            &key.precompute.compute_barycentric_coefficients(t),
+            &multiproof_commit,
+            t,
+            Some(transcript),
+        )?;
+        Ok(IPAMultiProof { ipa: proof, d: d })
+    }
+
     fn verify(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        index: usize,
         proof: &Self::Proof,
     ) -> Result<bool, Self::Error> {
-        let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
-        let mut c = commitment.clone();
-        let mut b = key
-            .precompute
-            .compute_barycentric_coefficients(G::ScalarField::from(proof.x as u64));
-        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
-        transcript.append(commitment, "C")?;
-        transcript.append(&G::ScalarField::from(proof.x as u64), "input point")?;
-        transcript.append(&proof.y, "output point")?;
-        let mut ra = transcript.hash("w", true);
-        let mut points_coeffs = vec![G::ScalarField::one()];
-        let q = key.q * ra;
-        c += q * proof.y;
-
-        for i in 0..proof.l.len() {
-            transcript.append(&proof.l[i], "L")?;
-            transcript.append(&proof.r[i], "R")?;
-            ra = transcript.hash("x", true);
-
-            c = proof.l[i] + c * ra + proof.r[i] * ra.square();
-            points_coeffs = points_coeffs
-                .into_iter()
-                .map(|x| vec![x * ra, x])
-                .flatten()
-                .collect();
-        }
-
-        let combined_point = inner_product(&gens, &points_coeffs);
-        let combined_b = inner_product(&b, &points_coeffs);
-
-        Ok(c == combined_point * proof.tip + q * (proof.tip * combined_b))
+        let input_point = G::ScalarField::from(index as u64);
+        low_level_verify_ipa::<G, G::ScalarField, D>(
+            &key.g,
+            &key.q,
+            &key.precompute.compute_barycentric_coefficients(input_point),
+            commitment,
+            input_point,
+            proof,
+            None,
+        )
     }
 
     fn verify_batch(
@@ -408,6 +468,56 @@ where
         proof: &Self::BatchProof,
     ) -> Result<bool, Self::Error> {
         todo!()
+    }
+
+    fn verify_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+        proof: &Self::MultiProof,
+    ) -> Result<bool, Self::Error> {
+        let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
+        for query in queries {
+            transcript.append(query.commit, "C");
+            transcript.append(&query.z, "z");
+            transcript.append(&query.y, "y");
+        }
+
+        let r = transcript.hash("r", true);
+        transcript.append(&proof.d, "D");
+        let t = transcript.hash("t", true);
+
+        let mut g2_of_t = G::ScalarField::zero();
+        let mut r_pow = G::ScalarField::one();
+        let mut e_coeffs = HashMap::<&IPACommitment<G>, G::ScalarField>::new();
+
+        for query in queries {
+            let e_coeff = r_pow / (t - G::ScalarField::from(query.z as u64));
+            e_coeffs
+                .entry(query.commit)
+                .and_modify(|c| *c += e_coeff)
+                .or_insert(e_coeff);
+
+            g2_of_t += e_coeff * query.y;
+            r_pow *= r;
+        }
+
+        let e: G = e_coeffs.into_iter().map(|(c, coeff)| *c * coeff).sum();
+        transcript.append(&e, "E");
+
+        low_level_verify_ipa(
+            &key.g,
+            &key.q,
+            &key.precompute.compute_barycentric_coefficients(t),
+            &(e - proof.d),
+            t,
+            &proof.ipa,
+            Some(transcript),
+        )
     }
 }
 impl<const N: usize, G, D> IPA<N, G, D>
@@ -432,8 +542,8 @@ where
         let mut ra = transcript.hash("x", true);
 
         while data.len() > 1 {
-            let (data_l, data_r) = split(data);
-            let (gens_l, gens_r) = split(gens);
+            let (data_l, data_r) = split(&data);
+            let (gens_l, gens_r) = split(&gens);
 
             let y_l = inner_product(&gens_r, &data_l);
             let y_r = inner_product(&gens_l, &data_r);
@@ -508,10 +618,118 @@ fn vec_add_and_distribute<R: Copy, T: Copy + Add<T, Output = T> + Mul<R, Output 
     a.iter().zip(b.iter()).map(|(a, b)| *a + (*b * x)).collect()
 }
 
-fn split<T: Clone>(a: Vec<T>) -> (Vec<T>, Vec<T>) {
+fn split<T: Clone>(a: &[T]) -> (Vec<T>, Vec<T>) {
     // TODO: Remove
     assert!(a.len() % 2 == 0);
     (a[0..a.len() / 2].to_vec(), a[a.len() / 2..].to_vec())
+}
+
+fn powers_of<T: Mul<T, Output = T> + One + Copy>(a: T, n: usize) -> Vec<T> {
+    let mut res = Vec::with_capacity(n);
+    let mut cur = T::one();
+    res.push(cur);
+
+    (1..n).for_each(|_| {
+        cur = cur * a;
+        res.push(cur);
+    });
+
+    res
+}
+
+fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
+    gens: &[G],
+    q: &G,
+    a: &[F],
+    b: &[F],
+    commitment: &IPACommitment<G>,
+    input_point: F,
+    prev_transcript: Option<Transcript<F, D>>,
+) -> Result<IPAProof<G>, IPAError> {
+    let eval = inner_product(&a, &b);
+
+    let mut gens = gens[0..a.len()].to_vec();
+    let mut data = a.clone().to_vec();
+    let mut other = b.clone().to_vec();
+    let mut transcript = match prev_transcript {
+        Some(t) => t,
+        None => Transcript::<G::ScalarField, D>::new("ipa"),
+    };
+    transcript.append(commitment, "C")?;
+    transcript.append(&input_point, "input point")?;
+    transcript.append(&eval, "output point")?;
+
+    //let hasher = D::new(&[]);
+    let mut l: Vec<G> = Vec::new();
+    let mut r: Vec<G> = Vec::new();
+    let mut ra = transcript.hash("w", true);
+
+    let q = *q * ra;
+    while data.len() > 1 {
+        let (data_l, data_r) = split(&data);
+        let (gens_l, gens_r) = split(&gens);
+        let (b_l, b_r) = split(&other);
+        let y_l = inner_product(&gens_r, &data_l) + q * inner_product(&data_l, &b_r);
+        let y_r = inner_product(&gens_l, &data_r) + q * inner_product(&data_r, &b_l);
+
+        l.push(y_l);
+        r.push(y_r);
+        transcript.append(&y_l, "L")?;
+        transcript.append(&y_r, "R")?;
+        ra = transcript.hash("x", true);
+
+        data = vec_add_and_distribute(&data_l, &data_r, ra);
+        gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
+        other = vec_add_and_distribute(&b_r, &b_l, ra);
+    }
+
+    Ok(IPAProof {
+        l,
+        r,
+        tip: data[0],
+        y: eval,
+    })
+}
+
+fn low_level_verify_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
+    gens: &[G],
+    q: &G,
+    b: &[F],
+    commitment: &IPACommitment<G>,
+    input_point: F,
+    proof: &IPAProof<G>,
+    prev_transcript: Option<Transcript<F, D>>,
+) -> Result<bool, IPAError> {
+    let mut c = commitment.clone();
+    let mut transcript = match prev_transcript {
+        Some(t) => t,
+        None => Transcript::<G::ScalarField, D>::new("ipa"),
+    };
+    transcript.append(commitment, "C")?;
+    transcript.append(&input_point, "input point")?;
+    transcript.append(&proof.y, "output point")?;
+    let mut ra = transcript.hash("w", true);
+    let mut points_coeffs = vec![G::ScalarField::one()];
+    let q = *q * ra;
+    c += q * proof.y;
+
+    for i in 0..proof.l.len() {
+        transcript.append(&proof.l[i], "L")?;
+        transcript.append(&proof.r[i], "R")?;
+        ra = transcript.hash("x", true);
+
+        c = proof.l[i] + c * ra + proof.r[i] * ra.square();
+        points_coeffs = points_coeffs
+            .into_iter()
+            .map(|x| vec![x * ra, x])
+            .flatten()
+            .collect();
+    }
+
+    let combined_point = inner_product(&gens, &points_coeffs);
+    let combined_b = inner_product(&b, &points_coeffs);
+
+    Ok(c == combined_point * proof.tip + q * (proof.tip * combined_b))
 }
 
 #[cfg(test)]
@@ -521,7 +739,7 @@ mod tests {
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
     use ark_ec::Group;
-    use ark_ff::field_hashers::DefaultFieldHasher;
+    use ark_ff::{field_hashers::DefaultFieldHasher, UniformRand};
 
     use rand::{thread_rng, Rng};
     use sha2::Sha256;
@@ -556,10 +774,6 @@ mod tests {
 
     #[test]
     fn test_eval_proof() {
-        let mut gens = [G::zero(); SIZE];
-        (0..SIZE).for_each(|i| gens[i] = G::generator() * F::from(i as u64 + 1));
-        let q = G::generator() * F::from(SIZE as u64 + 1);
-
         let data_raw: Vec<F> = (0..SIZE as u64).map(|i| F::from(i)).collect();
 
         let point_gen = IPAPointGenerator::default();
@@ -569,10 +783,45 @@ mod tests {
 
         let index = thread_rng().gen_range(0..SIZE) as usize;
         let proof = IPAT::prove(&crs, &commit, index, &data).unwrap();
-        assert!(IPAT::verify(&crs, &commit, &proof).unwrap());
+        assert!(IPAT::verify(&crs, &commit, index, &proof).unwrap());
 
         let index_outside = SIZE * 2;
         let proof_outside = IPAT::prove(&crs, &commit, index_outside, &data).unwrap();
-        assert!(IPAT::verify(&crs, &commit, &proof_outside).unwrap());
+        assert!(IPAT::verify(&crs, &commit, index_outside, &proof_outside).unwrap());
+    }
+
+    #[test]
+    fn test_multiproof() {
+        let NUM_MULTIPROOF = 20;
+        let point_gen = IPAPointGenerator::default();
+        let crs = IPAT::setup(SIZE, &point_gen).unwrap();
+
+        let all_data: Vec<(IPAPreparedData<SIZE, F>, IPACommitment<G>)> = (0..NUM_MULTIPROOF)
+            .map(|_| {
+                let data = IPAPreparedData::<SIZE, F>::new_incremental(
+                    (0..SIZE).map(|_| F::rand(&mut thread_rng())).collect(),
+                );
+                let commit = IPAT::commit(&crs, &data).unwrap();
+
+                (data, commit)
+            })
+            .collect();
+
+        let queries: Vec<_> = all_data
+            .iter()
+            .map(|(data, commit)| {
+                let z = thread_rng().gen_range(0..SIZE);
+                MultiProofQuery {
+                    commit: commit,
+                    data: data,
+                    z: z,
+                    y: data.data[z],
+                }
+            })
+            .collect();
+
+        let proof = IPAT::prove_multiproof(&crs, &queries).unwrap();
+
+        assert!(IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
     }
 }
