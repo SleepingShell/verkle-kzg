@@ -68,7 +68,7 @@ fn bench_verify_single(c: &mut Criterion) {
     c.bench_function("ipa_verify_single_in_domain", |b| {
         let index = thread_rng().gen_range(0..SIZE);
         let proof = IPAT::prove(&crs, &commit, index, &data).unwrap();
-        b.iter(|| IPAT::verify(&crs, &commit, &proof))
+        b.iter(|| IPAT::verify(&crs, &commit, index, &proof))
     });
 }
 

@@ -6,7 +6,7 @@
 //! Most VC schemes aim to generate constant or logarithmic sized proofs with efficient verification.
 //! Some VC scheme require a trusted setup in which parameters are generated for proving/verification.
 //! The binding property of these schemes is reliant on no one knowing the secret used in the trusted setup.
-use std::{error::Error, fmt::Debug};
+use std::{collections::HashMap, error::Error, fmt::Debug};
 
 use ark_ff::{PrimeField, Zero};
 use rand::RngCore;
@@ -39,6 +39,16 @@ pub trait VCPreparedData {
     fn max_size(&self) -> usize;
 }
 
+/// (evaluation point) => Vec<(Commitment, Dataset)>
+//pub type MultiProofQuery<'a, C, D> = HashMap<usize, Vec<(&'a C, &'a D)>>;
+#[derive(Clone)]
+pub struct MultiProofQuery<'a, C, D, F> {
+    data: &'a D,
+    commit: &'a C,
+    z: usize,
+    y: F,
+}
+
 /// A vector commitment schemes allows committing to a vector of data and generating proofs of inclusion.
 pub trait VectorCommitment {
     /// The universal parameters for the vector commitment scheme.
@@ -56,6 +66,9 @@ pub trait VectorCommitment {
 
     /// The proof for multiple members of a vector.
     type BatchProof;
+
+    /// The proof for multiple vectors evaluated at various points
+    type MultiProof;
 
     /// The error type for the scheme.
     type Error: Error + Debug;
@@ -85,26 +98,50 @@ pub trait VectorCommitment {
         data: &Self::PreparedData,
     ) -> Result<Self::Proof, Self::Error>;
 
-    /// Generate all proofs of the dataset using the Feist-Khovratovich techique
-    fn prove_all(
+    /// Generate a batch proof that proves all of the `indexes`.
+    fn prove_batch(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        indexes: Vec<usize>,
         data: &Self::PreparedData,
     ) -> Result<Self::BatchProof, Self::Error>;
+
+    /// Create a multiproof that proves multiple datasets at (possibly) multiple different evaluation points
+    fn prove_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+    ) -> Result<Self::MultiProof, Self::Error>;
 
     /// Verify that the `proof` is valid with respect to the `key` and `commitment`
     fn verify(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
+        index: usize,
         proof: &Self::Proof,
     ) -> Result<bool, Self::Error>;
 
-    /// Verify multiple proofs are valid
-    /// TODO: Keep this as boolean return value, or number of valid proofs? Once compression is implemeneted then will be boolean
+    /// Verify the batch proof is valid
     fn verify_batch(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
         proof: &Self::BatchProof,
+    ) -> Result<bool, Self::Error>;
+
+    /// Verify a multiproof
+    fn verify_multiproof<'a>(
+        key: &Self::UniversalParams,
+        queries: &[MultiProofQuery<
+            'a,
+            Self::Commitment,
+            Self::PreparedData,
+            <Self::PreparedData as VCPreparedData>::Item,
+        >],
+        proof: &Self::MultiProof,
     ) -> Result<bool, Self::Error>;
 
     /// Converts a commitment to `PreparedData::Item`

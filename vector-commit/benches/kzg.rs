@@ -69,7 +69,7 @@ fn bench_multi_proof(c: &mut Criterion) {
     let (data, crs) = setup(DATA_SIZE, MAX_CRS);
     let commit = KZG::commit(&crs, &data).unwrap();
     c.bench_function("kzg_all_proof", |b| {
-        b.iter(|| KZG::prove_all(&crs, &commit, &data))
+        b.iter(|| KZG::prove_batch(&crs, &commit, (0..DATA_SIZE).collect(), &data))
     });
 }
 
