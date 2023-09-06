@@ -49,6 +49,12 @@ pub struct MultiProofQuery<'a, C, D, F> {
     y: F,
 }
 
+impl<'a, C, D, F> MultiProofQuery<'a, C, D, F> {
+    pub fn new(data: &'a D, commit: &'a C, z: usize, y: F) -> Self {
+        Self { data, commit, z, y }
+    }
+}
+
 /// A vector commitment schemes allows committing to a vector of data and generating proofs of inclusion.
 pub trait VectorCommitment {
     /// The universal parameters for the vector commitment scheme.

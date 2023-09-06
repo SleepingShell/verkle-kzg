@@ -270,7 +270,7 @@ impl<const N: usize, F: PrimeField> VCPreparedData for IPAPreparedData<N, F> {
     }
 
     fn get(&self, index: usize) -> Option<&Self::Item> {
-        if index < self.max {
+        if index <= self.max {
             Some(&self.data[index])
         } else {
             None
