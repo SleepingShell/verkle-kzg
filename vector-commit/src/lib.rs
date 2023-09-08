@@ -14,6 +14,7 @@ use thiserror::Error;
 
 pub mod ipa;
 pub mod kzg;
+mod precompute;
 mod transcript;
 
 /// The proving and verification parameters for the VC scheme

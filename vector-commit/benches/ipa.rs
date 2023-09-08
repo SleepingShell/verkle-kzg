@@ -18,8 +18,9 @@ type IPAT = IPA<256, G1, Hasher>;
 fn gen_data(num: usize) -> IPAPreparedData<SIZE, F> {
     let mut data: Vec<F> = vec![];
     let mut rng = thread_rng();
-    for _i in 0..num {
-        data.push(F::rand(&mut rng));
+    let r_f = F::rand(&mut rng);
+    for i in 0..num {
+        data.push(r_f + F::from(i as u64));
     }
     IPAPreparedData::<SIZE, F>::new_incremental(data)
 }

@@ -12,11 +12,15 @@ use ark_ff::{
     batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField, Field, One,
     PrimeField, Zero,
 };
-use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, Polynomial};
+use ark_poly::{
+    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    Polynomial,
+};
 use ark_serialize::CanonicalSerialize;
 use thiserror::Error;
 
 use crate::{
+    precompute::PrecomputedLagrange,
     transcript::{self, Transcript, TranscriptError},
     MultiProofQuery, PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams,
     VectorCommitment,
@@ -26,99 +30,6 @@ mod ipa_point_generator;
 pub use ipa_point_generator::IPAPointGenerator;
 
 use self::ipa_point_generator::EthereumHashToCurve;
-
-/// Precomputed barycentric elements in a domain of size `N`.
-struct PrecomputedLagrange<const N: usize, F: Field> {
-    // l(x) = ∏(X-x_i) AKA A(x)
-    vanishing_polynomial: DensePolynomial<F>,
-
-    // l'(x) = ∑ l(x)/(X-x_i) AKA A'(x)
-    vanishing_derivative: DensePolynomial<F>,
-
-    // w_j = ∏_{m!=j}(x_j-x_m)^-1
-    barycentric_weights: [F; N],
-}
-
-impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
-    fn new() -> Self {
-        let domain = (0..N as u64).map(|x| F::from(x)).collect::<Vec<F>>();
-        let vanishing = Self::compute_vanishing_polynomial(&domain);
-        let derivative = Self::compute_vanishing_derivative(&domain, &vanishing);
-        let weights = Self::compute_barycentric_weights(domain);
-
-        Self {
-            vanishing_polynomial: vanishing,
-            vanishing_derivative: derivative,
-            barycentric_weights: weights,
-        }
-    }
-
-    fn compute_vanishing_polynomial(x_points: &Vec<F>) -> DensePolynomial<F> {
-        let mut res = DensePolynomial::<F>::from_coefficients_slice(&[F::one()]);
-        x_points.into_iter().for_each(|x| {
-            res = &res * &DensePolynomial::<F>::from_coefficients_slice(&[F::zero() - x, F::one()]);
-        });
-
-        res
-    }
-
-    fn compute_vanishing_derivative(
-        x_points: &Vec<F>,
-        vanishing_roots: &DensePolynomial<F>,
-    ) -> DensePolynomial<F> {
-        let mut res = DensePolynomial::<F>::from_coefficients_slice(&[F::zero()]);
-        x_points.into_iter().for_each(|x| {
-            res += &(vanishing_roots
-                / &DensePolynomial::<F>::from_coefficients_slice(&[F::zero() - x, F::one()]));
-        });
-
-        res
-    }
-
-    fn compute_barycentric_weights(points: Vec<F>) -> [F; N] {
-        let mut weights = [F::zero(); N];
-        points.iter().enumerate().for_each(|(i, x)| {
-            let mut sum = F::one();
-            points.iter().for_each(|x_inner| {
-                if (x != x_inner) {
-                    sum *= *x - *x_inner;
-                }
-            });
-            weights[i] = sum.inverse().unwrap();
-        });
-
-        weights
-    }
-
-    /// Computes the b vector in IPA. When this vector is inner product'd by the evaluations in the domain,
-    /// the result is the evaluation F(point).
-    ///
-    /// b_i = l(point) / l'(x_i)(z-x_i)
-    fn compute_barycentric_coefficients(&self, point: F) -> Vec<F> {
-        if point < F::from(N as u64) {
-            let mut res = vec![F::zero(); N];
-            //FIXME: THIS IS SO BAD OH MY GOD
-            let mut point_usize = 0usize;
-            point
-                .into_bigint()
-                .to_bytes_be()
-                .into_iter()
-                .for_each(|b| point_usize = (point_usize << 8) | b as usize);
-            res[point_usize] = F::one();
-            return res;
-        }
-        let vanishing_eval = self.vanishing_polynomial.evaluate(&point);
-        let mut coeffs = Vec::new();
-        (0..N as u64).into_iter().for_each(|i| {
-            let f_i = F::from(i);
-            coeffs.push(self.vanishing_derivative.evaluate(&f_i) * (point - f_i));
-        });
-
-        batch_inversion_and_mul(&mut coeffs, &vanishing_eval);
-
-        coeffs
-    }
-}
 
 pub struct IPAUniversalParams<const N: usize, G: Group, D: HashToField<G::ScalarField>> {
     g: [G; N], // Gens to commit the evaluations of the dataset
@@ -244,17 +155,13 @@ impl<const N: usize, F: PrimeField> IPAPreparedData<N, F> {
             }
 
             let denom = F::from(i as u64) - index_f;
-
             let sub = self.data[i] - eval;
-            q[i] = sub * denom.inverse().unwrap();
+            q[i] = sub / denom;
             q[index] += sub
                 * denom
-                * precompute.vanishing_derivative.evaluate(&index_f)
-                * precompute
-                    .vanishing_derivative
-                    .evaluate(&F::from(i as u64))
-                    .inverse()
-                    .unwrap();
+                * (index_f - F::from(i as u64))
+                * precompute.vanishing_at(index)
+                * precompute.vanishing_inverse_at(i);
         }
 
         q
@@ -807,7 +714,7 @@ mod tests {
             })
             .collect();
 
-        let queries: Vec<_> = all_data
+        let mut queries: Vec<_> = all_data
             .iter()
             .map(|(data, commit)| {
                 let z = thread_rng().gen_range(0..SIZE);
@@ -820,8 +727,17 @@ mod tests {
             })
             .collect();
 
-        let proof = IPAT::prove_multiproof(&crs, &queries).unwrap();
+        let mut proof = IPAT::prove_multiproof(&crs, &queries).unwrap();
 
         assert!(IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
+        proof.d += G::generator();
+        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
+        proof.d -= G::generator();
+        queries[0].y += F::one();
+        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
+        queries[0].y -= F::one();
+        proof.ipa.l[0] += G::generator();
+        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
+        proof.ipa.l[0] -= G::generator();
     }
 }
