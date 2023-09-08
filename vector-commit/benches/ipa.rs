@@ -4,7 +4,7 @@ use vector_commit::{ipa::*, MultiProofQuery, VCPreparedData, VectorCommitment};
 
 use ark_bn254::Bn254;
 use ark_ec::pairing::Pairing;
-use ark_ff::{field_hashers::DefaultFieldHasher, UniformRand};
+use ark_ff::{field_hashers::DefaultFieldHasher, PrimeField, UniformRand};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 const SIZE: usize = 256;

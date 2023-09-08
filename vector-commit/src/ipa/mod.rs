@@ -21,7 +21,8 @@ use thiserror::Error;
 
 use crate::{
     precompute::PrecomputedLagrange,
-    transcript::{self, Transcript, TranscriptError},
+    transcript::{Transcript, TranscriptError},
+    utils::*,
     MultiProofQuery, PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams,
     VectorCommitment,
 };
@@ -502,48 +503,6 @@ where
     }
 }
 
-fn serialize<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
-    let mut b = Vec::new();
-    x.serialize_compressed(&mut b);
-
-    b
-}
-
-fn inner_product<R: Copy, T: Mul<R, Output = T> + Sum<T> + Copy>(a: &[T], b: &[R]) -> T {
-    //a.iter().zip(b.iter()).map(|(a, b)| *a * *b).sum()
-    b.iter().enumerate().map(|(i, r)| a[i] * *r).sum()
-}
-
-//res_i = a_i + x*b_i
-fn vec_add_and_distribute<R: Copy, T: Copy + Add<T, Output = T> + Mul<R, Output = T>>(
-    a: &[T],
-    b: &[T],
-    x: R,
-) -> Vec<T> {
-    //TODO: Remove
-    assert!(a.len() == b.len());
-    a.iter().zip(b.iter()).map(|(a, b)| *a + (*b * x)).collect()
-}
-
-fn split<T: Clone>(a: &[T]) -> (Vec<T>, Vec<T>) {
-    // TODO: Remove
-    assert!(a.len() % 2 == 0);
-    (a[0..a.len() / 2].to_vec(), a[a.len() / 2..].to_vec())
-}
-
-fn powers_of<T: Mul<T, Output = T> + One + Copy>(a: T, n: usize) -> Vec<T> {
-    let mut res = Vec::with_capacity(n);
-    let mut cur = T::one();
-    res.push(cur);
-
-    (1..n).for_each(|_| {
-        cur = cur * a;
-        res.push(cur);
-    });
-
-    res
-}
-
 fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
     gens: &[G],
     q: &G,
@@ -566,7 +525,6 @@ fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
     transcript.append(&input_point, "input point")?;
     transcript.append(&eval, "output point")?;
 
-    //let hasher = D::new(&[]);
     let mut l: Vec<G> = Vec::new();
     let mut r: Vec<G> = Vec::new();
     let mut ra = transcript.hash("w", true);
