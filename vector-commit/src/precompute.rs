@@ -55,7 +55,6 @@ impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
     pub(crate) fn compute_barycentric_coefficients(&self, point: F) -> [F; N] {
         let mut res = [F::zero(); N];
         if point < F::from(N as u64) {
-            //FIXME: THIS IS SO BAD OH MY GOD
             let point_usize = point.into_bigint().as_ref()[0] as usize;
             res[point_usize] = F::one();
             return res;
