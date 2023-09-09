@@ -35,7 +35,6 @@ fn setup(n: usize, max_degree: usize) -> (KZGPreparedData<F>, KZGKey<F, G1, G2>)
 
 fn bench_setup(c: &mut Criterion) {
     let base = 32;
-    let rng = &mut rand::thread_rng();
     let point_gen = KZGRandomPointGenerator::default();
 
     let mut group = c.benchmark_group("kzg_crs_setup");

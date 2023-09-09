@@ -8,14 +8,14 @@
 //! The binding property of these schemes is reliant on no one knowing the secret used in the trusted setup.
 use std::{collections::HashMap, error::Error, fmt::Debug};
 
-use ark_ff::{PrimeField, Zero};
-use rand::RngCore;
+use ark_ff::Zero;
 use thiserror::Error;
 
 pub mod ipa;
 pub mod kzg;
 mod precompute;
 mod transcript;
+pub(crate) mod utils;
 
 /// The proving and verification parameters for the VC scheme
 pub trait VCUniversalParams {
@@ -40,8 +40,6 @@ pub trait VCPreparedData {
     fn max_size(&self) -> usize;
 }
 
-/// (evaluation point) => Vec<(Commitment, Dataset)>
-//pub type MultiProofQuery<'a, C, D> = HashMap<usize, Vec<(&'a C, &'a D)>>;
 #[derive(Clone)]
 pub struct MultiProofQuery<'a, C, D, F> {
     data: &'a D,
