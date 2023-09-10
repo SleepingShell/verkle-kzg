@@ -294,22 +294,45 @@ where
         >],
     ) -> Result<Self::MultiProof, Self::Error> {
         let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
-        for query in queries {
+
+        /// evaluation point => vec<queries>
+        let mut queries_by_point: HashMap<usize, Vec<_>> = HashMap::new();
+        for query in queries.into_iter() {
             transcript.append(query.commit, "C");
             transcript.append(&query.z, "z");
             transcript.append(&query.y, "y");
+
+            queries_by_point
+                .entry(query.z)
+                .or_insert(vec![query])
+                .push(query);
         }
 
         let r = transcript.hash("r", true);
-        let mut r_pow = G::ScalarField::one();
-
         let mut g = [G::ScalarField::zero(); N];
-        for query in queries {
-            let quotient = query.data.divide_by_vanishing(&key.precompute, query.z);
+        let r_pows = powers_of(r, queries.len());
+
+        let mut i = 0;
+        for (point, queries) in queries_by_point.iter() {
+            let mut total = [G::ScalarField::zero(); N];
+            let l = queries.len() - 1;
+            let this_r = &r_pows[i..i + l];
+
+            queries.iter().zip(this_r.iter()).for_each(|(q, r)| {
+                q.data
+                    .data
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, x)| total[i] += *r * x)
+            });
+
+            let quotient = IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
+                .divide_by_vanishing(&key.precompute, *point);
+
             for i in 0..N {
-                g[i] += r_pow * quotient[i];
+                g[i] += quotient[i];
             }
-            r_pow *= r;
+            i += l;
         }
 
         // Commitment to g(x)
@@ -317,10 +340,11 @@ where
         transcript.append(&d, "D");
 
         let t = transcript.hash("t", true);
-        r_pow = G::ScalarField::one();
+        let mut r_pow = G::ScalarField::one();
 
         let mut h = [G::ScalarField::zero(); N];
         for query in queries {
+            //TODO: batch inversion
             let denom = (t - G::ScalarField::from(query.z as u64))
                 .inverse()
                 .unwrap();
