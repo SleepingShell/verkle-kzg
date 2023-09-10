@@ -1,7 +1,7 @@
 //! Working in a domain with d-th roots of unity enables a large computational efficiency increase
 //! when working with polynomials in evaluation form.
 
-use ark_ff::{BigInteger, FftField, Field, PrimeField};
+use ark_ff::{batch_inversion, BigInteger, FftField, Field, PrimeField};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 
 /// Precomputes the evaluations (and inverses) of the derivative of the vanishing polynomial,
@@ -34,8 +34,9 @@ impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
         let unity = domain.group_gen();
         for i in 0..N {
             evals[i] = n_f * unity.pow(&[i as u64]).inverse().unwrap();
-            inv[i] = evals[i].inverse().unwrap();
+            inv[i] = evals[i]; // Batch invert after loop
         }
+        batch_inversion(&mut inv);
 
         (evals, inv, unity)
     }

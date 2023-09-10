@@ -9,14 +9,15 @@ use std::{
 
 use ark_ec::{CurveGroup, Group};
 use ark_ff::{
-    batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField, Field, One,
-    PrimeField, Zero,
+    batch_inversion, batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField,
+    Field, One, PrimeField, Zero,
 };
 use ark_poly::{
     univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
     Polynomial,
 };
 use ark_serialize::CanonicalSerialize;
+use itertools::Itertools;
 use thiserror::Error;
 
 use crate::{
@@ -294,36 +295,34 @@ where
         >],
     ) -> Result<Self::MultiProof, Self::Error> {
         let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
-
-        /// evaluation point => vec<queries>
-        let mut queries_by_point: HashMap<usize, Vec<_>> = HashMap::new();
-        for query in queries.into_iter() {
-            transcript.append(query.commit, "C");
-            transcript.append(&query.z, "z");
-            transcript.append(&query.y, "y");
-
-            queries_by_point
-                .entry(query.z)
-                .or_insert(vec![query])
-                .push(query);
+        for query in queries.iter() {
+            transcript.append(query.commit, "C")?;
+            transcript.append(&query.z, "z")?;
+            transcript.append(&query.y, "y")?;
         }
 
         let r = transcript.hash("r", true);
-        let mut g = [G::ScalarField::zero(); N];
         let r_pows = powers_of(r, queries.len());
 
-        let mut i = 0;
+        // Group queries evaluated at the same point together, and assign them their challenge
+        let mut queries_by_point: HashMap<usize, Vec<_>> = HashMap::new();
+        for (query, r_t) in queries.into_iter().zip(r_pows.into_iter()) {
+            queries_by_point
+                .entry(query.z)
+                .or_insert(Vec::new())
+                .push((query, r_t));
+        }
+
+        // Compute g(x)
+        let mut g = [G::ScalarField::zero(); N];
         for (point, queries) in queries_by_point.iter() {
             let mut total = [G::ScalarField::zero(); N];
-            let l = queries.len() - 1;
-            let this_r = &r_pows[i..i + l];
-
-            queries.iter().zip(this_r.iter()).for_each(|(q, r)| {
-                q.data
+            queries.iter().for_each(|q| {
+                q.0.data
                     .data
                     .iter()
                     .enumerate()
-                    .for_each(|(i, x)| total[i] += *r * x)
+                    .for_each(|(i, x)| total[i] += q.1 * x)
             });
 
             let quotient = IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
@@ -332,26 +331,30 @@ where
             for i in 0..N {
                 g[i] += quotient[i];
             }
-            i += l;
         }
 
         // Commitment to g(x)
         let d = inner_product(&key.g, &g);
         transcript.append(&d, "D");
 
+        // We will evaluate g(x) at the unknown-before-commit point t
         let t = transcript.hash("t", true);
-        let mut r_pow = G::ScalarField::one();
 
+        // Calculate all the t-z_i inversions at once
+        let mut inversions = [G::ScalarField::zero(); N];
+        queries_by_point
+            .keys()
+            .for_each(|z| inversions[*z] = t - G::ScalarField::from(*z as u64));
+        batch_inversion(&mut inversions);
+
+        // Calculate h(x)
         let mut h = [G::ScalarField::zero(); N];
-        for query in queries {
-            //TODO: batch inversion
-            let denom = (t - G::ScalarField::from(query.z as u64))
-                .inverse()
-                .unwrap();
-            for i in 0..N {
-                h[i] += r_pow * query.data.data[i] * denom;
+        for (point, queries) in queries_by_point.iter() {
+            for q in queries {
+                for j in 0..N {
+                    h[j] += q.1 * q.0.data.data[j] * inversions[*point];
+                }
             }
-            r_pow *= r;
         }
 
         let e = inner_product(&key.g, &h);
