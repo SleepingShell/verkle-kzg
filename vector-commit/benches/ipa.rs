@@ -74,60 +74,69 @@ fn bench_verify_single(c: &mut Criterion) {
 
 fn bench_prove_multiproof(c: &mut Criterion) {
     let base = 32;
+    let max = base * 512;
     let mut rng = rand::thread_rng();
     let (_, crs) = setup(SIZE, SIZE);
 
     let mut group = c.benchmark_group("ipa_multiproof_prove");
     group.sample_size(10);
-    for size in [base, base * 64, base * 512].iter() {
-        let all_data = (0..*size as usize)
-            .map(|_| {
-                let data = gen_data(SIZE);
-                let commit = IPAT::commit(&crs, &data).unwrap();
-                let challenge = rng.gen_range(0..SIZE);
-                let eval = *data.get(challenge).unwrap();
-                (data, commit, challenge, eval)
-            })
-            .collect::<Vec<_>>();
-        let queries = all_data
-            .iter()
-            .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
-            .collect::<Vec<_>>();
 
+    let all_data = (0..max as usize)
+        .map(|i| {
+            let data = gen_data(SIZE);
+            let commit = IPAT::commit(&crs, &data).unwrap();
+            let challenge = rng.gen_range(0..SIZE);
+            let eval = *data.get(challenge).unwrap();
+            (data, commit, challenge, eval)
+        })
+        .collect::<Vec<_>>();
+    let queries = all_data
+        .iter()
+        .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
+        .collect::<Vec<_>>();
+
+    for size in [base, base * 64, max].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), &queries, |b, q| {
-            b.iter(|| IPAT::prove_multiproof(&crs, q));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            &queries[0..*size],
+            |b, q| {
+                b.iter(|| IPAT::prove_multiproof(&crs, q));
+            },
+        );
     }
 }
 
 fn bench_verify_multiproof(c: &mut Criterion) {
     let base = 32;
+    let max = base * 512;
     let mut rng = rand::thread_rng();
     let (_, crs) = setup(SIZE, SIZE);
 
     let mut group = c.benchmark_group("ipa_multiproof_verify");
     group.sample_size(10);
-    for size in [base, base * 64, base * 512].iter() {
-        let all_data = (0..*size as usize)
-            .map(|_| {
-                let data = gen_data(SIZE);
-                let commit = IPAT::commit(&crs, &data).unwrap();
-                let challenge = rng.gen_range(0..SIZE);
-                let eval = *data.get(challenge).unwrap();
-                (data, commit, challenge, eval)
-            })
-            .collect::<Vec<_>>();
-        let queries = all_data
-            .iter()
-            .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
-            .collect::<Vec<_>>();
-        let proof = IPAT::prove_multiproof(&crs, &queries).unwrap();
+
+    let all_data = (0..max as usize)
+        .map(|i| {
+            let data = gen_data(SIZE);
+            let commit = IPAT::commit(&crs, &data).unwrap();
+            let challenge = rng.gen_range(0..SIZE);
+            let eval = *data.get(challenge).unwrap();
+            (data, commit, challenge, eval)
+        })
+        .collect::<Vec<_>>();
+    let queries = all_data
+        .iter()
+        .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
+        .collect::<Vec<_>>();
+
+    for size in [base, base * 64, max].iter() {
+        let proof = IPAT::prove_multiproof(&crs, &queries[0..*size]).unwrap();
 
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
-            &(&queries, &proof),
+            &(&queries[0..*size], &proof),
             |b, (q, p)| {
                 b.iter(|| IPAT::verify_multiproof(&crs, *q, *p));
             },
