@@ -306,32 +306,40 @@ where
         let r = transcript.hash("r", true);
         let r_pows = powers_of(r, queries.len());
 
-        // Group queries evaluated at the same point together
-        let mut queries_by_point: HashMap<usize, Vec<_>> = HashMap::new();
-        for (query, r_t) in queries.into_iter().zip(r_pows.into_iter()) {
-            queries_by_point
-                .entry(query.z)
-                .or_insert(Vec::new())
-                .push((query, r_t));
-        }
+        // Scale queries by their challenge
+        let scaled_queries: Vec<(usize, [G::ScalarField; N])> = queries
+            .par_iter()
+            .zip(r_pows.par_iter())
+            .map(|(q, r)| {
+                (
+                    q.z,
+                    q.data
+                        .data
+                        .iter()
+                        .map(|x| *x * r)
+                        .collect::<Vec<G::ScalarField>>()
+                        .try_into()
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        // Group queries by their evaluation point
+        let queries_by_point = scaled_queries.iter().into_group_map_by(|q| q.0);
 
         // Compute g(x)
         let mut g = [G::ScalarField::zero(); N];
-        let queries_vec = queries_by_point.values().collect::<Vec<_>>();
-        let quotients: Vec<Vec<G::ScalarField>> = queries_vec
-            .par_iter()
-            .map(|queries| {
+        let quotients: Vec<Vec<G::ScalarField>> = queries_by_point
+            .iter()
+            .par_bridge()
+            .map(|(point, queries)| {
                 let mut total = [G::ScalarField::zero(); N];
                 queries.iter().for_each(|q| {
-                    q.0.data
-                        .data
-                        .iter()
-                        .enumerate()
-                        .for_each(|(i, x)| total[i] += q.1 * x)
+                    q.1.iter().enumerate().for_each(|(i, x)| total[i] += x);
                 });
 
                 IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
-                    .divide_by_vanishing(&key.precompute, queries[0].0.z)
+                    .divide_by_vanishing(&key.precompute, *point)
             })
             .collect();
 
@@ -360,7 +368,8 @@ where
         for (point, queries) in queries_by_point.iter() {
             for q in queries {
                 for j in 0..N {
-                    h[j] += q.1 * q.0.data.data[j] * inversions[*point];
+                    //h[j] += q.1 * q.0.data.data[j] * inversions[*point];
+                    h[j] += q.1[j] * inversions[*point];
                 }
             }
         }
