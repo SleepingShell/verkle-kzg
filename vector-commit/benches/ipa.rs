@@ -109,7 +109,7 @@ fn bench_prove_multiproof(c: &mut Criterion) {
 
 fn bench_verify_multiproof(c: &mut Criterion) {
     let base = 32;
-    let max = base * 512;
+    let max = base * 64;
     let mut rng = rand::thread_rng();
     let (_, crs) = setup(SIZE, SIZE);
 
