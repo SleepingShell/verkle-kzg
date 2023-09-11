@@ -20,6 +20,8 @@ use ark_serialize::CanonicalSerialize;
 use itertools::Itertools;
 use thiserror::Error;
 
+use rayon::prelude::*;
+
 use crate::{
     precompute::PrecomputedLagrange,
     transcript::{Transcript, TranscriptError},
@@ -216,7 +218,7 @@ pub struct IPA<const N: usize, G, D> {
 impl<const N: usize, G, D> VectorCommitment for IPA<N, G, D>
 where
     G: CurveGroup,
-    D: HashToField<G::ScalarField>,
+    D: HashToField<G::ScalarField> + Sync,
 {
     type UniversalParams = IPAUniversalParams<N, G, D>;
     type PreparedData = IPAPreparedData<N, G::ScalarField>;
@@ -304,7 +306,7 @@ where
         let r = transcript.hash("r", true);
         let r_pows = powers_of(r, queries.len());
 
-        // Group queries evaluated at the same point together, and assign them their challenge
+        // Group queries evaluated at the same point together
         let mut queries_by_point: HashMap<usize, Vec<_>> = HashMap::new();
         for (query, r_t) in queries.into_iter().zip(r_pows.into_iter()) {
             queries_by_point
@@ -315,19 +317,25 @@ where
 
         // Compute g(x)
         let mut g = [G::ScalarField::zero(); N];
-        for (point, queries) in queries_by_point.iter() {
-            let mut total = [G::ScalarField::zero(); N];
-            queries.iter().for_each(|q| {
-                q.0.data
-                    .data
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, x)| total[i] += q.1 * x)
-            });
+        let queries_vec = queries_by_point.values().collect::<Vec<_>>();
+        let quotients: Vec<Vec<G::ScalarField>> = queries_vec
+            .par_iter()
+            .map(|queries| {
+                let mut total = [G::ScalarField::zero(); N];
+                queries.iter().for_each(|q| {
+                    q.0.data
+                        .data
+                        .iter()
+                        .enumerate()
+                        .for_each(|(i, x)| total[i] += q.1 * x)
+                });
 
-            let quotient = IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
-                .divide_by_vanishing(&key.precompute, *point);
+                IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
+                    .divide_by_vanishing(&key.precompute, queries[0].0.z)
+            })
+            .collect();
 
+        for quotient in quotients {
             for i in 0..N {
                 g[i] += quotient[i];
             }
@@ -335,7 +343,7 @@ where
 
         // Commitment to g(x)
         let d = inner_product(&key.g, &g);
-        transcript.append(&d, "D");
+        transcript.append(&d, "D")?;
 
         // We will evaluate g(x) at the unknown-before-commit point t
         let t = transcript.hash("t", true);
@@ -358,7 +366,7 @@ where
         }
 
         let e = inner_product(&key.g, &h);
-        transcript.append(&e, "E");
+        transcript.append(&e, "E")?;
 
         let h_minus_g: Vec<G::ScalarField> = g
             .into_iter()
@@ -376,7 +384,7 @@ where
             t,
             Some(transcript),
         )?;
-        Ok(IPAMultiProof { ipa: proof, d: d })
+        Ok(IPAMultiProof { ipa: proof, d })
     }
 
     fn verify(
@@ -690,8 +698,9 @@ mod tests {
 
         let all_data: Vec<(IPAPreparedData<SIZE, F>, IPACommitment<G>)> = (0..NUM_MULTIPROOF)
             .map(|_| {
+                let r = F::rand(&mut thread_rng());
                 let data = IPAPreparedData::<SIZE, F>::new_incremental(
-                    (0..SIZE).map(|_| F::rand(&mut thread_rng())).collect(),
+                    (0..SIZE).map(|i| r + F::from(i as u64)).collect(),
                 );
                 let commit = IPAT::commit(&crs, &data).unwrap();
 
