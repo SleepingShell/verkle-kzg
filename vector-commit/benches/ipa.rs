@@ -87,6 +87,9 @@ fn bench_prove_multiproof(c: &mut Criterion) {
             let commit = IPAT::commit(&crs, &data).unwrap();
             let challenge = rng.gen_range(0..SIZE);
             let eval = *data.get(challenge).unwrap();
+            if i % (max / 10) == 0 {
+                println!("{}% data generated", i / max);
+            }
             (data, commit, challenge, eval)
         })
         .collect::<Vec<_>>();
@@ -109,7 +112,7 @@ fn bench_prove_multiproof(c: &mut Criterion) {
 
 fn bench_verify_multiproof(c: &mut Criterion) {
     let base = 32;
-    let max = base * 64;
+    let max = base * 512;
     let mut rng = rand::thread_rng();
     let (_, crs) = setup(SIZE, SIZE);
 
@@ -122,6 +125,9 @@ fn bench_verify_multiproof(c: &mut Criterion) {
             let commit = IPAT::commit(&crs, &data).unwrap();
             let challenge = rng.gen_range(0..SIZE);
             let eval = *data.get(challenge).unwrap();
+            if i % (max / 10) == 0 {
+                println!("{}% data generated", i / max);
+            }
             (data, commit, challenge, eval)
         })
         .collect::<Vec<_>>();

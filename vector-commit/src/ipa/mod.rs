@@ -357,22 +357,13 @@ where
         let t = transcript.hash("t", true);
 
         // Calculate all the t-z_i inversions at once
-        /*
-        let mut inversions = [G::ScalarField::zero(); N];
-        queries_by_point
-            .keys()
-            .for_each(|z| inversions[*z] = t - G::ScalarField::from(*z as u64));
-        batch_inversion(&mut inversions);
-        */
         let inversions = invert_domain_at::<N, G::ScalarField>(t);
 
         // Calculate h(x)
         let mut h = [G::ScalarField::zero(); N];
         for (point, queries) in queries_by_point.iter() {
-            
             for q in queries {
                 for j in 0..N {
-                    //h[j] += q.1 * q.0.data.data[j] * inversions[*point];
                     h[j] += q.1[j] * inversions[*point];
                 }
             }
