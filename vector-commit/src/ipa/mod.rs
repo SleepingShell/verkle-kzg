@@ -12,17 +12,15 @@ use ark_ff::{
     batch_inversion, batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField,
     Field, One, PrimeField, Zero,
 };
-use ark_poly::{
-    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
-    Polynomial,
-};
-use ark_serialize::CanonicalSerialize;
+
+use ark_poly::GeneralEvaluationDomain;
 use itertools::Itertools;
 use thiserror::Error;
 
 use rayon::prelude::*;
 
 use crate::{
+    lagrange_basis::LagrangeBasis,
     precompute::PrecomputedLagrange,
     transcript::{Transcript, TranscriptError},
     utils::*,
@@ -38,7 +36,7 @@ use self::ipa_point_generator::EthereumHashToCurve;
 pub struct IPAUniversalParams<const N: usize, G: Group, D: HashToField<G::ScalarField>> {
     g: [G; N], // Gens to commit the evaluations of the dataset
     q: G,      // Gen to commit to the inner product of the dataset with it's b vector
-    precompute: PrecomputedLagrange<N, G::ScalarField>,
+    precompute: PrecomputedLagrange<G::ScalarField>,
 
     digest: PhantomData<D>,
 }
@@ -48,7 +46,7 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> IPAUniversalParam
         Self {
             g,
             q,
-            precompute: PrecomputedLagrange::new(),
+            precompute: PrecomputedLagrange::new(N),
             digest: PhantomData,
         }
     }
@@ -61,7 +59,7 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> IPAUniversalParam
         Self {
             g: real_g,
             q: all[N],
-            precompute: PrecomputedLagrange::new(),
+            precompute: PrecomputedLagrange::new(N),
             digest: PhantomData,
         }
     }
@@ -108,6 +106,7 @@ pub enum IPAError {
     TranscriptError(#[from] TranscriptError),
 }
 
+/*
 #[derive(Clone)]
 pub struct IPAPreparedData<const N: usize, F: Field> {
     data: [F; N],
@@ -171,7 +170,9 @@ impl<const N: usize, F: PrimeField> IPAPreparedData<N, F> {
         q
     }
 }
+*/
 
+/*
 impl<const N: usize, F: PrimeField> VCPreparedData for IPAPreparedData<N, F> {
     type Item = F;
     type Error = IPAError;
@@ -209,6 +210,7 @@ impl<const N: usize, F: PrimeField> VCPreparedData for IPAPreparedData<N, F> {
         }
     }
 }
+*/
 
 pub struct IPA<const N: usize, G, D> {
     _g: PhantomData<G>,
@@ -221,7 +223,8 @@ where
     D: HashToField<G::ScalarField> + Sync,
 {
     type UniversalParams = IPAUniversalParams<N, G, D>;
-    type PreparedData = IPAPreparedData<N, G::ScalarField>;
+    //type PreparedData = IPAPreparedData<N, G::ScalarField>;
+    type PreparedData = LagrangeBasis<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>;
     type Commitment = IPACommitment<G>;
     type Proof = IPAProof<G>;
     type BatchProof = Vec<Self::Proof>;
@@ -242,7 +245,7 @@ where
         key: &Self::UniversalParams,
         data: &Self::PreparedData,
     ) -> Result<Self::Commitment, Self::Error> {
-        Ok(inner_product(&key.g, &data.data))
+        Ok(inner_product(&key.g, data.elements_ref()))
     }
 
     fn convert_commitment_to_data(
@@ -270,7 +273,7 @@ where
         low_level_ipa::<G, G::ScalarField, D>(
             &key.g,
             &key.q,
-            &data.data,
+            data.elements_ref(),
             &b,
             commitment,
             G::ScalarField::from(index as u64),
@@ -314,8 +317,7 @@ where
                 (
                     q.z,
                     q.data
-                        .data
-                        .iter()
+                        .elements()
                         .map(|x| *x * r)
                         .collect::<Vec<G::ScalarField>>()
                         .try_into()
@@ -338,8 +340,10 @@ where
                     q.1.iter().enumerate().for_each(|(i, x)| total[i] += x);
                 });
 
-                IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
-                    .divide_by_vanishing(&key.precompute, *point)
+                LagrangeBasis::<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>::from_vec(
+                    total.to_vec(),
+                )
+                .divide_by_vanishing(&key.precompute, *point)
             })
             .collect();
 
@@ -471,17 +475,17 @@ where
 }
 impl<const N: usize, G, D> IPA<N, G, D>
 where
-    G: Group,
-    D: HashToField<G::ScalarField>,
+    G: CurveGroup,
+    D: HashToField<G::ScalarField> + Sync,
 {
     /// Prove that we have made a valid commitment
     pub fn prove_commitment(
         key: &IPAUniversalParams<N, G, D>,
         commitment: &IPACommitment<G>,
-        data: &IPAPreparedData<N, G::ScalarField>,
+        data: &<Self as VectorCommitment>::PreparedData,
     ) -> IPACommitProof<G> {
-        let max = data.max;
-        let mut data = data.data[0..max + 1].to_vec();
+        let max = data.max();
+        let mut data = data.elements_ref()[0..max + 1].to_vec();
         let mut gens = key.g[0..max + 1].to_vec();
         let mut l = Vec::<G>::new();
         let mut r = Vec::<G>::new();
@@ -667,7 +671,8 @@ mod tests {
 
         let point_gen = IPAPointGenerator::default();
         let crs = IPAT::setup(SIZE, &point_gen).unwrap();
-        let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
+        //let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
+        let data = LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(data_raw);
 
         let mut commit = IPAT::commit(&crs, &data).unwrap();
 
@@ -684,7 +689,7 @@ mod tests {
 
         let point_gen = IPAPointGenerator::default();
         let crs = IPAT::setup(SIZE, &point_gen).unwrap();
-        let data = IPAPreparedData::<SIZE, F>::new_incremental(data_raw);
+        let data = LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(data_raw);
         let mut commit = IPAT::commit(&crs, &data).unwrap();
 
         let index = thread_rng().gen_range(0..SIZE) as usize;
@@ -702,10 +707,13 @@ mod tests {
         let point_gen = IPAPointGenerator::default();
         let crs = IPAT::setup(SIZE, &point_gen).unwrap();
 
-        let all_data: Vec<(IPAPreparedData<SIZE, F>, IPACommitment<G>)> = (0..NUM_MULTIPROOF)
+        let all_data: Vec<(
+            LagrangeBasis<F, GeneralEvaluationDomain<F>>,
+            IPACommitment<G>,
+        )> = (0..NUM_MULTIPROOF)
             .map(|_| {
                 let r = F::rand(&mut thread_rng());
-                let data = IPAPreparedData::<SIZE, F>::new_incremental(
+                let data = LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(
                     (0..SIZE).map(|i| r + F::from(i as u64)).collect(),
                 );
                 let commit = IPAT::commit(&crs, &data).unwrap();
@@ -722,7 +730,7 @@ mod tests {
                     commit: commit,
                     data: data,
                     z: z,
-                    y: data.data[z],
+                    y: data[z],
                 }
             })
             .collect();

@@ -13,6 +13,8 @@ use thiserror::Error;
 
 pub mod ipa;
 pub mod kzg;
+pub mod lagrange_basis;
+mod multiproof;
 mod precompute;
 mod transcript;
 pub(crate) mod utils;
@@ -38,6 +40,10 @@ pub trait VCPreparedData {
 
     /// Return the max amount of data that can be stored in this data
     fn max_size(&self) -> usize;
+}
+
+pub trait VCCommitment<F> {
+    fn to_field(&self) -> F;
 }
 
 #[derive(Clone)]

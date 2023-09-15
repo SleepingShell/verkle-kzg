@@ -1,6 +1,9 @@
+use ark_poly::GeneralEvaluationDomain;
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
-use vector_commit::{ipa::*, MultiProofQuery, VCPreparedData, VectorCommitment};
+use vector_commit::{
+    ipa::*, lagrange_basis::LagrangeBasis, MultiProofQuery, VCPreparedData, VectorCommitment,
+};
 
 use ark_bn254::Bn254;
 use ark_ec::pairing::Pairing;
@@ -15,21 +18,21 @@ type Hasher = DefaultFieldHasher<Sha256>;
 
 type IPAT = IPA<256, G1, Hasher>;
 
-fn gen_data(num: usize) -> IPAPreparedData<SIZE, F> {
+fn gen_data(num: usize) -> LagrangeBasis<F, GeneralEvaluationDomain<F>> {
     let mut data: Vec<F> = vec![];
     let mut rng = thread_rng();
     let r_f = F::rand(&mut rng);
     for i in 0..num {
         data.push(r_f + F::from(i as u64));
     }
-    IPAPreparedData::<SIZE, F>::new_incremental(data)
+    LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(data)
 }
 
 fn setup(
     n: usize,
     max_degree: usize,
 ) -> (
-    IPAPreparedData<SIZE, F>,
+    LagrangeBasis<F, GeneralEvaluationDomain<F>>,
     IPAUniversalParams<SIZE, G1, Hasher>,
 ) {
     let data = gen_data(n);
@@ -88,7 +91,7 @@ fn bench_prove_multiproof(c: &mut Criterion) {
             let challenge = rng.gen_range(0..SIZE);
             let eval = *data.get(challenge).unwrap();
             if i % (max / 10) == 0 {
-                println!("{}% data generated", i / max);
+                println!("{}% data generated", i * 10 / max);
             }
             (data, commit, challenge, eval)
         })
@@ -126,7 +129,7 @@ fn bench_verify_multiproof(c: &mut Criterion) {
             let challenge = rng.gen_range(0..SIZE);
             let eval = *data.get(challenge).unwrap();
             if i % (max / 10) == 0 {
-                println!("{}% data generated", i / max);
+                println!("{}% data generated", i * 10 / max);
             }
             (data, commit, challenge, eval)
         })

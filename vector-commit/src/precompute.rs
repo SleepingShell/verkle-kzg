@@ -6,33 +6,36 @@ use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 
 /// Precomputes the evaluations (and inverses) of the derivative of the vanishing polynomial,
 /// and the barycentric weights
-pub(crate) struct PrecomputedLagrange<const N: usize, F: FftField> {
+pub(crate) struct PrecomputedLagrange<F: FftField> {
+    size: usize,
+
     unity: F,
 
-    vanishing_evaluations: [F; N],
+    vanishing_evaluations: Vec<F>,
 
-    vanishing_evaluations_inv: [F; N],
+    vanishing_evaluations_inv: Vec<F>,
     //barycentric_weights: [F; N],
 }
 
-impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
-    pub(crate) fn new() -> Self {
-        let (evals, inv, unity) = Self::compute_vanishing_evaluations();
+impl<F: PrimeField> PrecomputedLagrange<F> {
+    pub(crate) fn new(size: usize) -> Self {
+        let (evals, inv, unity) = Self::compute_vanishing_evaluations(size);
         Self {
+            size,
             unity,
             vanishing_evaluations: evals,
             vanishing_evaluations_inv: inv,
         }
     }
 
-    fn compute_vanishing_evaluations() -> ([F; N], [F; N], F) {
-        let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::new(N).unwrap();
-        let mut evals = [F::zero(); N];
-        let mut inv = [F::zero(); N];
+    fn compute_vanishing_evaluations(size: usize) -> (Vec<F>, Vec<F>, F) {
+        let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::new(size).unwrap();
+        let mut evals = vec![F::zero(); size];
+        let mut inv = vec![F::zero(); size];
 
-        let n_f = F::from(N as u64);
+        let n_f = F::from(size as u64);
         let unity = domain.group_gen();
-        for i in 0..N {
+        for i in 0..size {
             evals[i] = n_f * unity.pow(&[i as u64]).inverse().unwrap();
             inv[i] = evals[i]; // Batch invert after loop
         }
@@ -53,16 +56,16 @@ impl<const N: usize, F: PrimeField> PrecomputedLagrange<N, F> {
     /// the result is the evaluation F(point).
     ///
     /// b_i = l(point) / l'(x_i)(z-x_i)
-    pub(crate) fn compute_barycentric_coefficients(&self, point: F) -> [F; N] {
-        let mut res = [F::zero(); N];
-        if point < F::from(N as u64) {
+    pub(crate) fn compute_barycentric_coefficients(&self, point: F) -> Vec<F> {
+        let mut res = vec![F::zero(); self.size];
+        if point < F::from(self.size as u64) {
             let point_usize = point.into_bigint().as_ref()[0] as usize;
             res[point_usize] = F::one();
             return res;
         }
 
-        let t = (point.pow(&[N as u64]) - F::one()) / F::from(N as u64);
-        for i in 0..N {
+        let t = (point.pow(&[self.size as u64]) - F::one()) / F::from(self.size as u64);
+        for i in 0..self.size {
             let pow = self.unity.pow(&[i as u64]);
             res[i] = (t * pow) / (point - pow);
         }
