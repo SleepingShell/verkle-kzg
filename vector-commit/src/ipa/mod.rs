@@ -13,7 +13,7 @@ use ark_ff::{
     Field, One, PrimeField, Zero,
 };
 
-use ark_poly::GeneralEvaluationDomain;
+use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use itertools::Itertools;
 use thiserror::Error;
 
@@ -22,10 +22,9 @@ use rayon::prelude::*;
 use crate::{
     lagrange_basis::LagrangeBasis,
     precompute::PrecomputedLagrange,
-    transcript::{Transcript, TranscriptError},
+    transcript::{Transcript, TranscriptError, TranscriptHasher},
     utils::*,
-    MultiProofQuery, PointGenerator, PointGeneratorError, VCPreparedData, VCUniversalParams,
-    VectorCommitment,
+    PointGenerator, PointGeneratorError, VCUniversalParams, VectorCommitment,
 };
 
 mod ipa_point_generator;
@@ -65,11 +64,15 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> IPAUniversalParam
     }
 }
 
-impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> VCUniversalParams
+impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> VCUniversalParams<G::ScalarField>
     for IPAUniversalParams<N, G, D>
 {
     fn max_size(&self) -> usize {
         N
+    }
+
+    fn precompute(&self) -> &PrecomputedLagrange<G::ScalarField> {
+        &self.precompute
     }
 }
 
@@ -106,131 +109,28 @@ pub enum IPAError {
     TranscriptError(#[from] TranscriptError),
 }
 
-/*
-#[derive(Clone)]
-pub struct IPAPreparedData<const N: usize, F: Field> {
-    data: [F; N],
-
-    // The highest x value that this dataset contains
-    max: usize,
-}
-
-impl<const N: usize, F: PrimeField> IPAPreparedData<N, F> {
-    /// An ORDERED list of evaluation points
-    pub fn new(data_list: Vec<(usize, F)>) -> Self {
-        let max = data_list[data_list.len() - 1].0;
-        let mut data = [F::zero(); N];
-        data_list.into_iter().for_each(|(i, x)| data[i] = x);
-        Self { data, max }
-    }
-
-    /// The data domain is simply at 0..length-1
-    pub fn new_incremental(data_list: Vec<F>) -> Self {
-        let max = data_list.len() - 1;
-        let mut data = [F::zero(); N];
-        data_list
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, x)| data[i] = x);
-        Self { data, max }
-    }
-
-    /// Evaluate both inside and outside the domain
-    fn evaluate(&self, precompute: &PrecomputedLagrange<N, F>, index: usize) -> F {
-        match self.get(index) {
-            Some(res) => *res,
-            None => inner_product(
-                &precompute.compute_barycentric_coefficients(F::from(index as u64)),
-                &self.data,
-            ),
-        }
-    }
-
-    /// Compute the quotient polynomial q(x) = [f(X) - f(x_i)] / [X-x_i]
-    fn divide_by_vanishing(&self, precompute: &PrecomputedLagrange<N, F>, index: usize) -> Vec<F> {
-        let mut q = vec![F::zero(); N];
-        let index_f = F::from(index as u64);
-        let eval = self.data[index];
-
-        for i in 0..N {
-            if i == index {
-                continue;
-            }
-
-            let denom = F::from(i as u64) - index_f;
-            let sub = self.data[i] - eval;
-            q[i] = sub / denom;
-            q[index] += sub
-                * denom
-                * (index_f - F::from(i as u64))
-                * precompute.vanishing_at(index)
-                * precompute.vanishing_inverse_at(i);
-        }
-
-        q
-    }
-}
-*/
-
-/*
-impl<const N: usize, F: PrimeField> VCPreparedData for IPAPreparedData<N, F> {
-    type Item = F;
-    type Error = IPAError;
-
-    fn from_vec(data: Vec<Self::Item>) -> Self {
-        Self::new_incremental(data)
-    }
-
-    fn get(&self, index: usize) -> Option<&Self::Item> {
-        if index <= self.max {
-            Some(&self.data[index])
-        } else {
-            None
-        }
-    }
-
-    fn get_all(&self) -> Vec<(usize, Self::Item)> {
-        self.data
-            .into_iter()
-            .enumerate()
-            .filter(|(_i, x)| *x != F::zero())
-            .collect()
-    }
-
-    fn max_size(&self) -> usize {
-        N
-    }
-
-    fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
-        if index > N {
-            Err(IPAError::OutOfDomain)
-        } else {
-            self.data[index] = value;
-            Ok(())
-        }
-    }
-}
-*/
-
-pub struct IPA<const N: usize, G, D> {
+pub struct IPA<const N: usize, G, H, D> {
     _g: PhantomData<G>,
+    _h: PhantomData<H>,
     _d: PhantomData<D>,
 }
 
-impl<const N: usize, G, D> VectorCommitment for IPA<N, G, D>
+impl<const N: usize, G, H, D> VectorCommitment<G::ScalarField, D> for IPA<N, G, H, D>
 where
     G: CurveGroup,
-    D: HashToField<G::ScalarField> + Sync,
+    H: HashToField<G::ScalarField> + Sync,
+    D: EvaluationDomain<G::ScalarField>,
 {
-    type UniversalParams = IPAUniversalParams<N, G, D>;
+    type UniversalParams = IPAUniversalParams<N, G, H>;
     //type PreparedData = IPAPreparedData<N, G::ScalarField>;
-    type PreparedData = LagrangeBasis<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>;
+    //type PreparedData = LagrangeBasis<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>;
     type Commitment = IPACommitment<G>;
     type Proof = IPAProof<G>;
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
     type PointGenerator = IPAPointGenerator<G, EthereumHashToCurve>;
     type MultiProof = IPAMultiProof<G>;
+    type Transcript = TranscriptHasher<G::ScalarField, H>;
 
     fn setup(
         max_items: usize,
@@ -243,14 +143,12 @@ where
 
     fn commit(
         key: &Self::UniversalParams,
-        data: &Self::PreparedData,
+        data: &LagrangeBasis<G::ScalarField, D>,
     ) -> Result<Self::Commitment, Self::Error> {
         Ok(inner_product(&key.g, data.elements_ref()))
     }
 
-    fn convert_commitment_to_data(
-        commit: &Self::Commitment,
-    ) -> <Self::PreparedData as VCPreparedData>::Item {
+    fn convert_commitment_to_data(commit: &Self::Commitment) -> G::ScalarField {
         if commit.is_zero() {
             G::ScalarField::ZERO
         } else {
@@ -265,18 +163,32 @@ where
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
         index: usize,
-        data: &Self::PreparedData,
+        data: &LagrangeBasis<G::ScalarField, D>,
     ) -> Result<Self::Proof, Self::Error> {
-        let mut b = key
-            .precompute
-            .compute_barycentric_coefficients(G::ScalarField::from(index as u64));
-        low_level_ipa::<G, G::ScalarField, D>(
+        Self::prove_point(
+            key,
+            commitment,
+            G::ScalarField::from(index as u64),
+            data,
+            None,
+        )
+    }
+
+    fn prove_point(
+        key: &Self::UniversalParams,
+        commitment: &Self::Commitment,
+        point: G::ScalarField,
+        data: &LagrangeBasis<G::ScalarField, D>,
+        transcript: Option<Self::Transcript>,
+    ) -> Result<Self::Proof, Self::Error> {
+        let mut b = key.precompute.compute_barycentric_coefficients(point);
+        low_level_ipa::<G, G::ScalarField, Self::Transcript>(
             &key.g,
             &key.q,
             data.elements_ref(),
             &b,
             commitment,
-            G::ScalarField::from(index as u64),
+            point,
             None,
         )
     }
@@ -285,114 +197,9 @@ where
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
         indexes: Vec<usize>,
-        data: &Self::PreparedData,
+        data: &LagrangeBasis<G::ScalarField, D>,
     ) -> Result<Self::BatchProof, Self::Error> {
         todo!()
-    }
-
-    fn prove_multiproof<'a>(
-        key: &Self::UniversalParams,
-        queries: &[MultiProofQuery<
-            'a,
-            Self::Commitment,
-            Self::PreparedData,
-            <Self::PreparedData as VCPreparedData>::Item,
-        >],
-    ) -> Result<Self::MultiProof, Self::Error> {
-        let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
-        for query in queries.iter() {
-            transcript.append(query.commit, "C")?;
-            transcript.append(&query.z, "z")?;
-            transcript.append(&query.y, "y")?;
-        }
-
-        let r = transcript.hash("r", true);
-        let r_pows = powers_of(r, queries.len());
-
-        // Scale queries by their challenge
-        let scaled_queries: Vec<(usize, [G::ScalarField; N])> = queries
-            .par_iter()
-            .zip(r_pows.par_iter())
-            .map(|(q, r)| {
-                (
-                    q.z,
-                    q.data
-                        .elements()
-                        .map(|x| *x * r)
-                        .collect::<Vec<G::ScalarField>>()
-                        .try_into()
-                        .unwrap(),
-                )
-            })
-            .collect();
-
-        // Group queries by their evaluation point
-        let queries_by_point = scaled_queries.iter().into_group_map_by(|q| q.0);
-
-        // Compute g(x)
-        let mut g = [G::ScalarField::zero(); N];
-        let quotients: Vec<Vec<G::ScalarField>> = queries_by_point
-            .iter()
-            .par_bridge()
-            .map(|(point, queries)| {
-                let mut total = [G::ScalarField::zero(); N];
-                queries.iter().for_each(|q| {
-                    q.1.iter().enumerate().for_each(|(i, x)| total[i] += x);
-                });
-
-                LagrangeBasis::<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>::from_vec(
-                    total.to_vec(),
-                )
-                .divide_by_vanishing(&key.precompute, *point)
-            })
-            .collect();
-
-        for quotient in quotients {
-            for i in 0..N {
-                g[i] += quotient[i];
-            }
-        }
-
-        // Commitment to g(x)
-        let d = inner_product(&key.g, &g);
-        transcript.append(&d, "D")?;
-
-        // We will evaluate g(x) at the unknown-before-commit point t
-        let t = transcript.hash("t", true);
-
-        // Calculate all the t-z_i inversions at once
-        let inversions = invert_domain_at::<N, G::ScalarField>(t);
-
-        // Calculate h(x)
-        let mut h = [G::ScalarField::zero(); N];
-        for (point, queries) in queries_by_point.iter() {
-            for q in queries {
-                for j in 0..N {
-                    h[j] += q.1[j] * inversions[*point];
-                }
-            }
-        }
-
-        let e = inner_product(&key.g, &h);
-        transcript.append(&e, "E")?;
-
-        let h_minus_g: Vec<G::ScalarField> = g
-            .into_iter()
-            .zip(h.into_iter())
-            .map(|(g_i, h_i)| h_i - g_i)
-            .collect();
-
-        let multiproof_commit = e - d;
-        let proof = low_level_ipa::<G, G::ScalarField, D>(
-            &key.g,
-            &key.q,
-            &h_minus_g,
-            &key.precompute.compute_barycentric_coefficients(t),
-            &multiproof_commit,
-            t,
-            Some(transcript),
-        )?;
-        Ok(IPAMultiProof { ipa: proof, d })
     }
 
     fn verify(
@@ -401,13 +208,28 @@ where
         index: usize,
         proof: &Self::Proof,
     ) -> Result<bool, Self::Error> {
-        let input_point = G::ScalarField::from(index as u64);
-        low_level_verify_ipa::<G, G::ScalarField, D>(
+        Self::verify_point(
+            key,
+            commitment,
+            G::ScalarField::from(index as u64),
+            proof,
+            None,
+        )
+    }
+
+    fn verify_point(
+        key: &Self::UniversalParams,
+        commitment: &Self::Commitment,
+        point: G::ScalarField,
+        proof: &Self::Proof,
+        transcript: Option<Self::Transcript>,
+    ) -> Result<bool, Self::Error> {
+        low_level_verify_ipa::<G, G::ScalarField, Self::Transcript>(
             &key.g,
             &key.q,
-            &key.precompute.compute_barycentric_coefficients(input_point),
+            &key.precompute.compute_barycentric_coefficients(point),
             commitment,
-            input_point,
+            point,
             proof,
             None,
         )
@@ -420,69 +242,19 @@ where
     ) -> Result<bool, Self::Error> {
         todo!()
     }
-
-    fn verify_multiproof<'a>(
-        key: &Self::UniversalParams,
-        queries: &[MultiProofQuery<
-            'a,
-            Self::Commitment,
-            Self::PreparedData,
-            <Self::PreparedData as VCPreparedData>::Item,
-        >],
-        proof: &Self::MultiProof,
-    ) -> Result<bool, Self::Error> {
-        let mut transcript = Transcript::<G::ScalarField, D>::new("multiproof");
-        for query in queries {
-            transcript.append(query.commit, "C");
-            transcript.append(&query.z, "z");
-            transcript.append(&query.y, "y");
-        }
-
-        let r = transcript.hash("r", true);
-        transcript.append(&proof.d, "D");
-        let t = transcript.hash("t", true);
-
-        let mut g2_of_t = G::ScalarField::zero();
-        let mut r_pow = G::ScalarField::one();
-        let mut e_coeffs = HashMap::<&IPACommitment<G>, G::ScalarField>::new();
-
-        let inversions = invert_domain_at::<N, G::ScalarField>(t);
-
-        for query in queries {
-            let e_coeff = r_pow * inversions[query.z];
-            e_coeffs
-                .entry(query.commit)
-                .and_modify(|c| *c += e_coeff)
-                .or_insert(e_coeff);
-
-            g2_of_t += e_coeff * query.y;
-            r_pow *= r;
-        }
-
-        let e: G = e_coeffs.into_iter().map(|(c, coeff)| *c * coeff).sum();
-        transcript.append(&e, "E");
-
-        low_level_verify_ipa(
-            &key.g,
-            &key.q,
-            &key.precompute.compute_barycentric_coefficients(t),
-            &(e - proof.d),
-            t,
-            &proof.ipa,
-            Some(transcript),
-        )
-    }
 }
-impl<const N: usize, G, D> IPA<N, G, D>
+
+impl<const N: usize, G, H, D> IPA<N, G, H, D>
 where
     G: CurveGroup,
-    D: HashToField<G::ScalarField> + Sync,
+    H: HashToField<G::ScalarField> + Sync,
+    D: EvaluationDomain<G::ScalarField>,
 {
     /// Prove that we have made a valid commitment
     pub fn prove_commitment(
-        key: &IPAUniversalParams<N, G, D>,
+        key: &IPAUniversalParams<N, G, H>,
         commitment: &IPACommitment<G>,
-        data: &<Self as VectorCommitment>::PreparedData,
+        data: &LagrangeBasis<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>,
     ) -> IPACommitProof<G> {
         let max = data.max();
         let mut data = data.elements_ref()[0..max + 1].to_vec();
@@ -490,9 +262,9 @@ where
         let mut l = Vec::<G>::new();
         let mut r = Vec::<G>::new();
 
-        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        let mut transcript = <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("ipa");
         transcript.append(commitment, "C");
-        let mut ra = transcript.hash("x", true);
+        let mut ra = transcript.digest("x", true);
 
         while data.len() > 1 {
             let (data_l, data_r) = split(&data);
@@ -505,7 +277,7 @@ where
 
             transcript.append(&y_l, "L");
             transcript.append(&y_r, "R");
-            ra = transcript.hash("x", true);
+            ra = transcript.digest("x", true);
 
             data = vec_add_and_distribute(&data_l, &data_r, ra);
             gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
@@ -519,21 +291,21 @@ where
 
     /// Verify that a commitment is valid
     pub fn verify_commitment_proof(
-        key: &IPAUniversalParams<N, G, D>,
+        key: &IPAUniversalParams<N, G, H>,
         commitment: &IPACommitment<G>,
         proof: &IPACommitProof<G>,
     ) -> bool {
         let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
         let mut c = commitment.clone();
         let mut points_coeffs = vec![G::ScalarField::one()];
-        let mut transcript = Transcript::<G::ScalarField, D>::new("ipa");
+        let mut transcript = <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("ipa");
         transcript.append(commitment, "C");
-        let mut ra = transcript.hash("x", true);
+        let mut ra = transcript.digest("x", true);
 
         for i in 0..proof.l.len() {
             transcript.append(&proof.l[i], "L");
             transcript.append(&proof.r[i], "R");
-            ra = transcript.hash("x", true);
+            ra = transcript.digest("x", true);
 
             c = proof.l[i] + c * ra + proof.r[i] * ra.square();
             points_coeffs = points_coeffs
@@ -548,14 +320,14 @@ where
     }
 }
 
-fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
+fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, T: Transcript<F>>(
     gens: &[G],
     q: &G,
     a: &[F],
     b: &[F],
     commitment: &IPACommitment<G>,
     input_point: F,
-    prev_transcript: Option<Transcript<F, D>>,
+    prev_transcript: Option<T>,
 ) -> Result<IPAProof<G>, IPAError> {
     let eval = inner_product(&a, &b);
 
@@ -564,7 +336,7 @@ fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
     let mut other = b.clone().to_vec();
     let mut transcript = match prev_transcript {
         Some(t) => t,
-        None => Transcript::<G::ScalarField, D>::new("ipa"),
+        None => T::new("ipa"),
     };
     transcript.append(commitment, "C")?;
     transcript.append(&input_point, "input point")?;
@@ -572,7 +344,7 @@ fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
 
     let mut l: Vec<G> = Vec::new();
     let mut r: Vec<G> = Vec::new();
-    let mut ra = transcript.hash("w", true);
+    let mut ra = transcript.digest("w", true);
 
     let q = *q * ra;
     while data.len() > 1 {
@@ -586,7 +358,7 @@ fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
         r.push(y_r);
         transcript.append(&y_l, "L")?;
         transcript.append(&y_r, "R")?;
-        ra = transcript.hash("x", true);
+        ra = transcript.digest("x", true);
 
         data = vec_add_and_distribute(&data_l, &data_r, ra);
         gens = vec_add_and_distribute(&gens_r, &gens_l, ra);
@@ -601,24 +373,24 @@ fn low_level_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
     })
 }
 
-fn low_level_verify_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField<F>>(
+fn low_level_verify_ipa<G: Group<ScalarField = F>, F: PrimeField, T: Transcript<F>>(
     gens: &[G],
     q: &G,
     b: &[F],
     commitment: &IPACommitment<G>,
     input_point: F,
     proof: &IPAProof<G>,
-    prev_transcript: Option<Transcript<F, D>>,
+    prev_transcript: Option<T>,
 ) -> Result<bool, IPAError> {
     let mut c = commitment.clone();
     let mut transcript = match prev_transcript {
         Some(t) => t,
-        None => Transcript::<G::ScalarField, D>::new("ipa"),
+        None => T::new("ipa"),
     };
     transcript.append(commitment, "C")?;
     transcript.append(&input_point, "input point")?;
     transcript.append(&proof.y, "output point")?;
-    let mut ra = transcript.hash("w", true);
+    let mut ra = transcript.digest("w", true);
     let mut points_coeffs = vec![G::ScalarField::one()];
     let q = *q * ra;
     c += q * proof.y;
@@ -626,7 +398,7 @@ fn low_level_verify_ipa<G: Group<ScalarField = F>, F: PrimeField, D: HashToField
     for i in 0..proof.l.len() {
         transcript.append(&proof.l[i], "L")?;
         transcript.append(&proof.r[i], "R")?;
-        ra = transcript.hash("x", true);
+        ra = transcript.digest("x", true);
 
         c = proof.l[i] + c * ra + proof.r[i] * ra.square();
         points_coeffs = points_coeffs
@@ -659,7 +431,7 @@ mod tests {
     type Hasher = DefaultFieldHasher<Sha256>;
 
     const SIZE: usize = 32;
-    type IPAT = IPA<SIZE, G, Hasher>;
+    type IPAT = IPA<SIZE, G, Hasher, GeneralEvaluationDomain<F>>;
 
     #[test]
     fn test_commit_evaluations() {
@@ -699,53 +471,6 @@ mod tests {
         let index_outside = SIZE * 2;
         let proof_outside = IPAT::prove(&crs, &commit, index_outside, &data).unwrap();
         assert!(IPAT::verify(&crs, &commit, index_outside, &proof_outside).unwrap());
-    }
-
-    #[test]
-    fn test_multiproof() {
-        let NUM_MULTIPROOF = 20;
-        let point_gen = IPAPointGenerator::default();
-        let crs = IPAT::setup(SIZE, &point_gen).unwrap();
-
-        let all_data: Vec<(
-            LagrangeBasis<F, GeneralEvaluationDomain<F>>,
-            IPACommitment<G>,
-        )> = (0..NUM_MULTIPROOF)
-            .map(|_| {
-                let r = F::rand(&mut thread_rng());
-                let data = LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(
-                    (0..SIZE).map(|i| r + F::from(i as u64)).collect(),
-                );
-                let commit = IPAT::commit(&crs, &data).unwrap();
-
-                (data, commit)
-            })
-            .collect();
-
-        let mut queries: Vec<_> = all_data
-            .iter()
-            .map(|(data, commit)| {
-                let z = thread_rng().gen_range(0..SIZE);
-                MultiProofQuery {
-                    commit: commit,
-                    data: data,
-                    z: z,
-                    y: data[z],
-                }
-            })
-            .collect();
-
-        let mut proof = IPAT::prove_multiproof(&crs, &queries).unwrap();
-
-        assert!(IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
-        proof.d += G::generator();
-        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
-        proof.d -= G::generator();
-        queries[0].y += F::one();
-        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
-        queries[0].y -= F::one();
-        proof.ipa.l[0] += G::generator();
-        assert!(!IPAT::verify_multiproof(&crs, &queries, &proof).unwrap());
-        proof.ipa.l[0] -= G::generator();
+        assert!(!IPAT::verify(&crs, &commit, index, &proof_outside).unwrap());
     }
 }

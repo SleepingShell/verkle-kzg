@@ -6,7 +6,7 @@ use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 
 /// Precomputes the evaluations (and inverses) of the derivative of the vanishing polynomial,
 /// and the barycentric weights
-pub(crate) struct PrecomputedLagrange<F: FftField> {
+pub struct PrecomputedLagrange<F: FftField> {
     size: usize,
 
     unity: F,

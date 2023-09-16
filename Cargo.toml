@@ -3,6 +3,7 @@ members = [
   "vector-commit",
   "verkle-tree",
 ]
+edition = "2021"
 
 [profile.release]
 debug = true

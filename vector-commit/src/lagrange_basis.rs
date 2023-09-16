@@ -34,7 +34,10 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
 
     pub fn new_zero(size: usize) -> Self {
         Self {
-            evaluations: Evaluations::from_vec_and_domain(vec![], D::new(size).unwrap()),
+            evaluations: Evaluations::from_vec_and_domain(
+                vec![F::zero(); size],
+                D::new(size).unwrap(),
+            ),
             max: 0,
         }
     }
