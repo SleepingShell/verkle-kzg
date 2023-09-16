@@ -18,7 +18,7 @@ use transcript::Transcript;
 pub mod ipa;
 pub mod kzg;
 pub mod lagrange_basis;
-mod multiproof;
+pub mod multiproof;
 pub mod precompute;
 pub(crate) mod transcript;
 pub(crate) mod utils;

@@ -1,8 +1,12 @@
 use ark_poly::GeneralEvaluationDomain;
+use pprof::criterion::{Output, PProfProfiler};
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
 use vector_commit::{
-    ipa::*, lagrange_basis::LagrangeBasis, MultiProofQuery, VCPreparedData, VectorCommitment,
+    ipa::*,
+    lagrange_basis::LagrangeBasis,
+    multiproof::{MultiproofProverQuery, MultiproofVerifierQuery, VectorCommitmentMultiproof},
+    VectorCommitment,
 };
 
 use ark_bn254::Bn254;
@@ -16,7 +20,7 @@ type F = <Bn254 as Pairing>::ScalarField;
 type G1 = <Bn254 as Pairing>::G1;
 type Hasher = DefaultFieldHasher<Sha256>;
 
-type IPAT = IPA<256, G1, Hasher>;
+type IPAT = IPA<256, G1, Hasher, GeneralEvaluationDomain<F>>;
 
 fn gen_data(num: usize) -> LagrangeBasis<F, GeneralEvaluationDomain<F>> {
     let mut data: Vec<F> = vec![];
@@ -89,16 +93,16 @@ fn bench_prove_multiproof(c: &mut Criterion) {
             let data = gen_data(SIZE);
             let commit = IPAT::commit(&crs, &data).unwrap();
             let challenge = rng.gen_range(0..SIZE);
-            let eval = *data.get(challenge).unwrap();
+            let eval = data[challenge];
             if i % (max / 10) == 0 {
-                println!("{}% data generated", i * 10 / max);
+                println!("{}% data generated", 10 * (i / max));
             }
             (data, commit, challenge, eval)
         })
         .collect::<Vec<_>>();
     let queries = all_data
         .iter()
-        .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
+        .map(|(d, c, z, y)| MultiproofProverQuery::new(d, c, *z, *y))
         .collect::<Vec<_>>();
 
     for size in [base, base * 64, max].iter() {
@@ -127,17 +131,18 @@ fn bench_verify_multiproof(c: &mut Criterion) {
             let data = gen_data(SIZE);
             let commit = IPAT::commit(&crs, &data).unwrap();
             let challenge = rng.gen_range(0..SIZE);
-            let eval = *data.get(challenge).unwrap();
+            let eval = data[challenge];
             if i % (max / 10) == 0 {
-                println!("{}% data generated", i * 10 / max);
+                println!("{}% data generated", 10 * (i / max));
             }
             (data, commit, challenge, eval)
         })
         .collect::<Vec<_>>();
-    let queries = all_data
+    let queries: Vec<_> = all_data
         .iter()
-        .map(|(d, c, z, y)| MultiProofQuery::new(d, c, *z, *y))
-        .collect::<Vec<_>>();
+        .map(|(d, c, z, y)| MultiproofProverQuery::new(d, c, *z, *y))
+        .collect();
+    let verifier_queries: Vec<_> = queries.iter().map(|q| q.to_verifier_query()).collect();
 
     for size in [base, base * 64, max].iter() {
         let proof = IPAT::prove_multiproof(&crs, &queries[0..*size]).unwrap();
@@ -145,7 +150,7 @@ fn bench_verify_multiproof(c: &mut Criterion) {
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
-            &(&queries[0..*size], &proof),
+            &(&verifier_queries[0..*size], &proof),
             |b, (q, p)| {
                 b.iter(|| IPAT::verify_multiproof(&crs, *q, *p));
             },
@@ -153,12 +158,13 @@ fn bench_verify_multiproof(c: &mut Criterion) {
     }
 }
 
-criterion_group!(
-    proofs,
-    bench_commitment,
+criterion_group! {
+    name = proofs;
+    config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    targets = bench_commitment,
     bench_prove_single,
     bench_verify_single,
     bench_prove_multiproof,
     bench_verify_multiproof
-);
+}
 criterion_main!(proofs);

@@ -58,16 +58,19 @@ pub struct Multiproof<P, D> {
     d: D,
 }
 
-pub trait VectorCommitmentMultiproof<const N: usize, G: Group, D: EvaluationDomain<G::ScalarField>>:
+pub trait VectorCommitmentMultiproof<const N: usize, G, D>:
     VectorCommitment<G::ScalarField, D>
 where
+    G: Group,
+    D: EvaluationDomain<G::ScalarField> + Sync + Send,
     <Self as VectorCommitment<G::ScalarField, D>>::Commitment: CanonicalSerialize
         + Sub<Output = <Self as VectorCommitment<G::ScalarField, D>>::Commitment>
         + Eq
         + Hash
         + Mul<G::ScalarField, Output = Self::Commitment>
         + Sum
-        + Copy,
+        + Copy
+        + Sync,
 {
     /// Create a multiproof that proves multiple datasets at (possibly) multiple different evaluation points
     fn prove_multiproof<'a>(
@@ -92,8 +95,8 @@ where
 
         // Scale queries by their challenge
         let scaled_queries: Vec<(usize, LagrangeBasis<G::ScalarField, D>)> = queries
-            .iter()
-            .zip(r_pows.iter())
+            .par_iter()
+            .zip(r_pows.par_iter())
             .map(|(q, r)| (q.z, q.data * *r))
             .collect();
 
@@ -198,7 +201,7 @@ impl<const N: usize, G, H, D> VectorCommitmentMultiproof<N, G, D> for IPA<N, G, 
 where
     G: CurveGroup,
     H: HashToField<G::ScalarField> + Sync,
-    D: EvaluationDomain<G::ScalarField>,
+    D: EvaluationDomain<G::ScalarField> + Sync + Send,
 {
 }
 
