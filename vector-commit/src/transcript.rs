@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, marker::PhantomData};
+use std::marker::PhantomData;
 
 use ark_ff::{field_hashers::HashToField, Field};
 use ark_serialize::CanonicalSerialize;

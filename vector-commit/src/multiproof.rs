@@ -6,8 +6,8 @@ use std::{
 };
 
 use ark_ec::{CurveGroup, Group};
-use ark_ff::{field_hashers::HashToField, FftField, Field, One, Zero};
-use ark_poly::{evaluations, EvaluationDomain, Evaluations, GeneralEvaluationDomain};
+use ark_ff::{field_hashers::HashToField, One, Zero};
+use ark_poly::EvaluationDomain;
 use ark_serialize::CanonicalSerialize;
 
 use itertools::Itertools;
@@ -16,9 +16,7 @@ use rayon::prelude::*;
 use crate::{
     ipa::IPA,
     lagrange_basis::LagrangeBasis,
-    precompute::PrecomputedLagrange,
     transcript::Transcript,
-    transcript::TranscriptHasher,
     utils::{invert_domain_at, powers_of},
     VCUniversalParams, VectorCommitment,
 };
@@ -215,6 +213,7 @@ mod tests {
     use ark_ec::Group;
     use ark_ff::{field_hashers::DefaultFieldHasher, UniformRand};
 
+    use ark_poly::GeneralEvaluationDomain;
     use rand::{thread_rng, Rng};
     use sha2::Sha256;
 

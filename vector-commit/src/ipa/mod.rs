@@ -1,30 +1,17 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Display,
-    iter::Sum,
-    marker::PhantomData,
-    ops::{Add, Mul},
-};
+use std::marker::PhantomData;
 
 use ark_ec::{CurveGroup, Group};
-use ark_ff::{
-    batch_inversion, batch_inversion_and_mul, field_hashers::HashToField, BigInteger, FftField,
-    Field, One, PrimeField, Zero,
-};
+use ark_ff::{field_hashers::HashToField, Field, One, PrimeField, Zero};
 
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
-use itertools::Itertools;
 use thiserror::Error;
-
-use rayon::prelude::*;
 
 use crate::{
     lagrange_basis::LagrangeBasis,
     precompute::PrecomputedLagrange,
     transcript::{Transcript, TranscriptError, TranscriptHasher},
     utils::*,
-    PointGenerator, PointGeneratorError, VCUniversalParams, VectorCommitment,
+    PointGenerator, VCUniversalParams, VectorCommitment,
 };
 
 mod ipa_point_generator;
