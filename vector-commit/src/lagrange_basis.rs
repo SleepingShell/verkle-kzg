@@ -1,11 +1,15 @@
-use std::ops::{AddAssign, Index};
+use std::ops::{AddAssign, Index, Mul, MulAssign, Sub};
 
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, Evaluations};
 use thiserror::Error;
 
-use crate::{precompute::PrecomputedLagrange, utils::inner_product, VCPreparedData};
+use crate::{
+    precompute::PrecomputedLagrange,
+    utils::{inner_product, max},
+};
 
+#[derive(Clone)]
 pub struct LagrangeBasis<F: PrimeField, D: EvaluationDomain<F>> {
     /// The evaluations (data) stored in the vector
     evaluations: Evaluations<F, D>,
@@ -25,6 +29,13 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
         Self {
             evaluations: Evaluations::from_vec_and_domain(data, domain),
             max,
+        }
+    }
+
+    pub fn new_zero(size: usize) -> Self {
+        Self {
+            evaluations: Evaluations::from_vec_and_domain(vec![], D::new(size).unwrap()),
+            max: 0,
         }
     }
 
@@ -91,29 +102,29 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
 }
 
 // TODO: These methods are less needed with LagrangeBasis - refactor
-impl<F: PrimeField, D: EvaluationDomain<F>> VCPreparedData for LagrangeBasis<F, D> {
-    type Item = F;
-    type Error = LagrangeError;
+// impl<F: PrimeField, D: EvaluationDomain<F>> VCPreparedData for LagrangeBasis<F, D> {
+//     type Item = F;
+//     type Error = LagrangeError;
 
-    fn from_vec(data: Vec<Self::Item>) -> Self {
-        Self::from_vec(data)
-    }
+//     fn from_vec(data: Vec<Self::Item>) -> Self {
+//         Self::from_vec(data)
+//     }
 
-    fn get(&self, index: usize) -> Option<&Self::Item> {
-        Some(&self[index])
-    }
+//     fn get(&self, index: usize) -> Option<&Self::Item> {
+//         Some(&self[index])
+//     }
 
-    fn get_all(&self) -> Vec<(usize, Self::Item)> {
-        self.elements().enumerate().map(|(i, v)| (i, *v)).collect()
-    }
+//     fn get_all(&self) -> Vec<(usize, Self::Item)> {
+//         self.elements().enumerate().map(|(i, v)| (i, *v)).collect()
+//     }
 
-    fn max_size(&self) -> usize {
-        self.evaluations.domain().size()
-    }
-    fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
-        todo!()
-    }
-}
+//     fn max_size(&self) -> usize {
+//         self.evaluations.domain().size()
+//     }
+//     fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
+//         todo!()
+//     }
+// }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D> {
     type Output = F;
@@ -126,6 +137,33 @@ impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D>
 impl<F: PrimeField, D: EvaluationDomain<F>> AddAssign<&Self> for LagrangeBasis<F, D> {
     fn add_assign(&mut self, rhs: &Self) {
         self.evaluations += &rhs.evaluations;
+    }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> Sub for LagrangeBasis<F, D> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            evaluations: &self.evaluations - &rhs.evaluations,
+            max: *max(&self.max, &rhs.max),
+        }
+    }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> Mul<F> for &LagrangeBasis<F, D> {
+    type Output = LagrangeBasis<F, D>;
+    fn mul(self, rhs: F) -> Self::Output {
+        LagrangeBasis {
+            evaluations: &self.evaluations * rhs,
+            max: self.max,
+        }
+    }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> MulAssign<F> for LagrangeBasis<F, D> {
+    fn mul_assign(&mut self, rhs: F) {
+        self.evaluations = &self.evaluations * rhs;
     }
 }
 
