@@ -8,7 +8,8 @@
 //! The binding property of these schemes is reliant on no one knowing the secret used in the trusted setup.
 use std::{collections::HashMap, error::Error, fmt::Debug};
 
-use ark_ff::{FftField, PrimeField, Zero};
+use ark_ec::Group;
+use ark_ff::{FftField, Field, PrimeField, Zero};
 use ark_poly::EvaluationDomain;
 use lagrange_basis::LagrangeBasis;
 use precompute::PrecomputedLagrange;
@@ -54,6 +55,20 @@ pub trait VCCommitment<F> {
     fn to_field(&self) -> F;
 }
 
+/// Default implementation when the proof is simply a group element
+impl<G: Group> VCCommitment<G::ScalarField> for G {
+    fn to_field(&self) -> G::ScalarField {
+        if self.is_zero() {
+            G::ScalarField::ZERO
+        } else {
+            let mut bytes: Vec<u8> = Vec::new();
+            // TODO: Check
+            self.serialize_compressed(&mut bytes).unwrap();
+            G::ScalarField::from_le_bytes_mod_order(&bytes)
+        }
+    }
+}
+
 /// A vector commitment schemes allows committing to a vector of data and generating proofs of inclusion.
 pub trait VectorCommitment<F: PrimeField, D: EvaluationDomain<F>> {
     /// The universal parameters for the vector commitment scheme.
@@ -61,16 +76,13 @@ pub trait VectorCommitment<F: PrimeField, D: EvaluationDomain<F>> {
     type UniversalParams: VCUniversalParams<F>;
 
     /// The Commitment to a vector.
-    type Commitment: PartialEq + Clone;
+    type Commitment: VCCommitment<F> + PartialEq + Clone;
 
     /// The proof for a single member of a vector.
     type Proof;
 
     /// The proof for multiple members of a vector.
     type BatchProof;
-
-    /// The proof for multiple vectors evaluated at various points
-    type MultiProof;
 
     /// The error type for the scheme.
     type Error: Error + Debug;
@@ -101,7 +113,9 @@ pub trait VectorCommitment<F: PrimeField, D: EvaluationDomain<F>> {
         commitment: &Self::Commitment,
         index: usize,
         data: &LagrangeBasis<F, D>,
-    ) -> Result<Self::Proof, Self::Error>;
+    ) -> Result<Self::Proof, Self::Error> {
+        Self::prove_point(key, commitment, F::from(index as u64), data, None)
+    }
 
     /// Perform the same operation as the `prove` method, but take in a `Self::Point` evaluation point
     fn prove_point(
@@ -126,7 +140,9 @@ pub trait VectorCommitment<F: PrimeField, D: EvaluationDomain<F>> {
         commitment: &Self::Commitment,
         index: usize,
         proof: &Self::Proof,
-    ) -> Result<bool, Self::Error>;
+    ) -> Result<bool, Self::Error> {
+        Self::verify_point(key, commitment, F::from(index as u64), proof, None)
+    }
 
     /// Perform the same operation as the `verify` method, but take in a `Self::Point` evaluation point
     fn verify_point(
@@ -143,9 +159,6 @@ pub trait VectorCommitment<F: PrimeField, D: EvaluationDomain<F>> {
         commitment: &Self::Commitment,
         proof: &Self::BatchProof,
     ) -> Result<bool, Self::Error>;
-
-    /// Converts a commitment to `PreparedData::Item`
-    fn convert_commitment_to_data(commit: &Self::Commitment) -> F;
 }
 
 #[derive(Error, Debug)]

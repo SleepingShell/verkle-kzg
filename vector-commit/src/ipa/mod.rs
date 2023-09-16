@@ -11,7 +11,7 @@ use crate::{
     precompute::PrecomputedLagrange,
     transcript::{Transcript, TranscriptError, TranscriptHasher},
     utils::*,
-    PointGenerator, VCUniversalParams, VectorCommitment,
+    PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
 };
 
 mod ipa_point_generator;
@@ -79,11 +79,6 @@ pub struct IPAProof<G: Group> {
     y: G::ScalarField,
 }
 
-pub struct IPAMultiProof<G: Group> {
-    ipa: IPAProof<G>,
-    d: G,
-}
-
 #[derive(Error, Clone, Debug)]
 pub enum IPAError {
     #[error("Attempting to use an in-domain function outside of the domain")]
@@ -116,7 +111,6 @@ where
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
     type PointGenerator = IPAPointGenerator<G, EthereumHashToCurve>;
-    type MultiProof = IPAMultiProof<G>;
     type Transcript = TranscriptHasher<G::ScalarField, H>;
 
     fn setup(
@@ -135,32 +129,6 @@ where
         Ok(inner_product(&key.g, data.elements_ref()))
     }
 
-    fn convert_commitment_to_data(commit: &Self::Commitment) -> G::ScalarField {
-        if commit.is_zero() {
-            G::ScalarField::ZERO
-        } else {
-            let mut bytes = Vec::new();
-            //TODO: Check
-            commit.serialize_compressed(&mut bytes).unwrap();
-            G::ScalarField::from_le_bytes_mod_order(&bytes)
-        }
-    }
-
-    fn prove(
-        key: &Self::UniversalParams,
-        commitment: &Self::Commitment,
-        index: usize,
-        data: &LagrangeBasis<G::ScalarField, D>,
-    ) -> Result<Self::Proof, Self::Error> {
-        Self::prove_point(
-            key,
-            commitment,
-            G::ScalarField::from(index as u64),
-            data,
-            None,
-        )
-    }
-
     fn prove_point(
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
@@ -176,7 +144,7 @@ where
             &b,
             commitment,
             point,
-            None,
+            transcript,
         )
     }
 
@@ -187,21 +155,6 @@ where
         data: &LagrangeBasis<G::ScalarField, D>,
     ) -> Result<Self::BatchProof, Self::Error> {
         todo!()
-    }
-
-    fn verify(
-        key: &Self::UniversalParams,
-        commitment: &Self::Commitment,
-        index: usize,
-        proof: &Self::Proof,
-    ) -> Result<bool, Self::Error> {
-        Self::verify_point(
-            key,
-            commitment,
-            G::ScalarField::from(index as u64),
-            proof,
-            None,
-        )
     }
 
     fn verify_point(
@@ -218,7 +171,7 @@ where
             commitment,
             point,
             proof,
-            None,
+            transcript,
         )
     }
 
