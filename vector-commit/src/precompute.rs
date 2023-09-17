@@ -67,6 +67,7 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
             return res;
         }
 
+        // t is the constant outside the summation in PCS multiproofs article
         let t = (point.pow(&[self.size as u64]) - F::one()) / F::from(self.size as u64);
         for i in 0..self.size {
             let pow = self.unity.pow(&[i as u64]);

@@ -92,20 +92,17 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
         let mut q = vec![F::zero(); self.max];
         let index_f = F::from(index as u64);
         let eval = self[index];
+        let index_vanishing = precompute.vanishing_at(index);
 
         for i in 0..self.max {
             if i == index {
                 continue;
             }
 
-            let denom = F::from(i as u64) - index_f;
             let sub = self[i] - eval;
-            let q_i = sub / denom;
-            q[i] = q_i;
-            q[index] += q_i
-                * (index_f - F::from(i as u64))
-                * precompute.vanishing_at(index)
-                * precompute.vanishing_inverse_at(i);
+            q[i] = sub / (F::from(i as u64) - index_f);
+            q[index] += sub * index_vanishing * precompute.vanishing_inverse_at(i)
+                / (index_f - F::from(i as u64));
         }
 
         q
