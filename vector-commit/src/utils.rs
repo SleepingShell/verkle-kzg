@@ -3,7 +3,7 @@ use std::{
     ops::{Add, Mul},
 };
 
-use ark_ff::{batch_inversion, Field, One};
+use ark_ff::{batch_inversion, Field, One, PrimeField};
 use ark_serialize::CanonicalSerialize;
 
 pub(crate) fn serialize<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
@@ -62,4 +62,8 @@ pub(crate) fn max<'a, T: Ord>(l: &'a T, r: &'a T) -> &'a T {
     } else {
         l
     }
+}
+
+pub(crate) fn to_usize<T: PrimeField>(x: T) -> usize {
+    x.into_bigint().as_ref()[0] as usize
 }

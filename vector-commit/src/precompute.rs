@@ -4,8 +4,11 @@
 use ark_ff::{batch_inversion, FftField, PrimeField};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 
+use crate::utils::to_usize;
+
 /// Precomputes the evaluations (and inverses) of the derivative of the vanishing polynomial,
 /// and the barycentric weights
+#[derive(Clone, Debug)]
 pub struct PrecomputedLagrange<F: FftField> {
     size: usize,
 
@@ -59,7 +62,7 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
     pub(crate) fn compute_barycentric_coefficients(&self, point: F) -> Vec<F> {
         let mut res = vec![F::zero(); self.size];
         if point < F::from(self.size as u64) {
-            let point_usize = point.into_bigint().as_ref()[0] as usize;
+            let point_usize = to_usize(point);
             res[point_usize] = F::one();
             return res;
         }

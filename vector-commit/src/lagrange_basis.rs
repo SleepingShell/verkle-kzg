@@ -1,12 +1,12 @@
 use std::ops::{AddAssign, Index, Mul, MulAssign, Sub};
 
 use ark_ff::PrimeField;
-use ark_poly::{EvaluationDomain, Evaluations};
+use ark_poly::{univariate::DensePolynomial, EvaluationDomain, Evaluations};
 use thiserror::Error;
 
 use crate::{
     precompute::PrecomputedLagrange,
-    utils::{inner_product, max},
+    utils::{inner_product, max, to_usize},
 };
 
 #[derive(Clone)]
@@ -59,6 +59,14 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
         self.evaluations.domain().size()
     }
 
+    pub(crate) fn evaluate(&self, precompute: &PrecomputedLagrange<F>, point: F) -> F {
+        if point <= F::from(self.max as u64) {
+            self.evaluations[to_usize(point)]
+        } else {
+            self.evaluate_outside_domain(precompute, point)
+        }
+    }
+
     pub(crate) fn evaluate_outside_domain(
         &self,
         precompute: &PrecomputedLagrange<F>,
@@ -92,9 +100,9 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
 
             let denom = F::from(i as u64) - index_f;
             let sub = self[i] - eval;
-            q[i] = sub / denom;
-            q[index] += sub
-                * denom
+            let q_i = sub / denom;
+            q[i] = q_i;
+            q[index] += q_i
                 * (index_f - F::from(i as u64))
                 * precompute.vanishing_at(index)
                 * precompute.vanishing_inverse_at(i);
@@ -102,32 +110,13 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
 
         q
     }
+
+    /// Rarely would we want to go into coefficient form, but some computational speedups
+    /// (i.e amortized KZG) only work in coefficient form
+    pub(crate) fn interpolate(&self) -> DensePolynomial<F> {
+        self.evaluations.interpolate_by_ref()
+    }
 }
-
-// TODO: These methods are less needed with LagrangeBasis - refactor
-// impl<F: PrimeField, D: EvaluationDomain<F>> VCPreparedData for LagrangeBasis<F, D> {
-//     type Item = F;
-//     type Error = LagrangeError;
-
-//     fn from_vec(data: Vec<Self::Item>) -> Self {
-//         Self::from_vec(data)
-//     }
-
-//     fn get(&self, index: usize) -> Option<&Self::Item> {
-//         Some(&self[index])
-//     }
-
-//     fn get_all(&self) -> Vec<(usize, Self::Item)> {
-//         self.elements().enumerate().map(|(i, v)| (i, *v)).collect()
-//     }
-
-//     fn max_size(&self) -> usize {
-//         self.evaluations.domain().size()
-//     }
-//     fn set_evaluation(&mut self, index: usize, value: Self::Item) -> Result<(), Self::Error> {
-//         todo!()
-//     }
-// }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D> {
     type Output = F;
