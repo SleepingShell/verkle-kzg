@@ -22,7 +22,8 @@ pub struct PrecomputedLagrange<F: FftField> {
 
 impl<F: PrimeField> PrecomputedLagrange<F> {
     pub(crate) fn new(size: usize) -> Self {
-        let (evals, inv, unity) = Self::compute_vanishing_evaluations(size);
+        let unity = GeneralEvaluationDomain::<F>::new(size).unwrap().group_gen();
+        let (evals, inv) = Self::compute_vanishing_evaluations(size, &unity);
         Self {
             size,
             unity,
@@ -31,20 +32,28 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
         }
     }
 
-    fn compute_vanishing_evaluations(size: usize) -> (Vec<F>, Vec<F>, F) {
-        let domain: GeneralEvaluationDomain<F> = GeneralEvaluationDomain::new(size).unwrap();
+    pub(crate) fn new_with_unity(size: usize, unity: F) -> Self {
+        let (evals, inv) = Self::compute_vanishing_evaluations(size, &unity);
+        Self {
+            size,
+            unity,
+            vanishing_evaluations: evals,
+            vanishing_evaluations_inv: inv,
+        }
+    }
+
+    fn compute_vanishing_evaluations(size: usize, unity: &F) -> (Vec<F>, Vec<F>) {
         let mut evals = vec![F::zero(); size];
         let mut inv = vec![F::zero(); size];
 
         let n_f = F::from(size as u64);
-        let unity = domain.group_gen();
         for i in 0..size {
             evals[i] = n_f * unity.pow(&[i as u64]).inverse().unwrap();
             inv[i] = evals[i]; // Batch invert after loop
         }
         batch_inversion(&mut inv);
 
-        (evals, inv, unity)
+        (evals, inv)
     }
 
     pub(crate) fn vanishing_at(&self, point: usize) -> F {
@@ -75,5 +84,9 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
         }
 
         res
+    }
+
+    pub(crate) fn unity(&self) -> F {
+        self.unity
     }
 }
