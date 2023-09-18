@@ -26,9 +26,9 @@ pprof = { version = "0.12.1", features = ["flamegraph", "criterion"] }
 [dev-dependencies]
 criterion = "0.5"
 
-[[bench]]
-name = "kzg"
-harness = false
+# [[bench]]
+# name = "kzg"
+# harness = false
 
 [[bench]]
 name = "ipa"

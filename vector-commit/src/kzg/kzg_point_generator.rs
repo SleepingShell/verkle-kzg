@@ -20,7 +20,7 @@ impl<G: Group> KZGRandomPointGenerator<G> {
 impl<G: Group> Default for KZGRandomPointGenerator<G> {
     fn default() -> Self {
         Self {
-            secret: G::ScalarField::one(),
+            secret: G::ScalarField::from(100u64),
         }
     }
 }

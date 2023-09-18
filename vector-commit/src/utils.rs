@@ -14,8 +14,8 @@ pub(crate) fn serialize<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
 }
 
 pub(crate) fn inner_product<R: Copy, T: Mul<R, Output = T> + Sum<T> + Copy>(a: &[T], b: &[R]) -> T {
-    //a.iter().zip(b.iter()).map(|(a, b)| *a * *b).sum()
-    b.iter().enumerate().map(|(i, r)| a[i] * *r).sum()
+    a.iter().zip(b.iter()).map(|(a, b)| *a * *b).sum()
+    //b.iter().enumerate().map(|(i, r)| a[i] * *r).sum()
 }
 
 //res_i = a_i + x*b_i
