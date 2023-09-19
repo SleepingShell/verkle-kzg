@@ -1,6 +1,6 @@
 use std::ops::{AddAssign, Index, Mul, MulAssign, Sub};
 
-use ark_ff::PrimeField;
+use ark_ff::{batch_inversion, PrimeField};
 use ark_poly::{univariate::DensePolynomial, EvaluationDomain, Evaluations};
 use thiserror::Error;
 
@@ -59,9 +59,16 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
         self.evaluations.domain().size()
     }
 
+    /// Evaluation has 3 paths:
+    /// 1. We have stored the evaluation, return this
+    /// 2. We have not stored the evaluation, but are within the domain. Return 0
+    /// 3. We are outside of the domain. Evaluate using barycentric interpolation
     pub(crate) fn evaluate(&self, precompute: &PrecomputedLagrange<F>, point: F) -> F {
-        if point <= F::from(self.max as u64) {
-            self.evaluations[to_usize(point)]
+        if point <= F::from(self.max() as u64) {
+            self[&point]
+        } else if point > F::from(self.max() as u64) && point <= F::from(self.domain_size() as u64)
+        {
+            F::zero()
         } else {
             self.evaluate_outside_domain(precompute, point)
         }
@@ -89,21 +96,49 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
         precompute: &PrecomputedLagrange<F>,
         index: usize,
     ) -> Vec<F> {
-        let mut q = vec![F::zero(); self.max];
+        let mut q = vec![F::zero(); self.evaluations.domain().size()];
         let index_f = self.index_to_point(index);
-        let eval = self[index];
+        let eval = if index >= self.max {
+            F::zero()
+        } else {
+            self[index]
+        };
         let index_vanishing = precompute.vanishing_at(index);
 
-        for i in 0..self.max {
+        for i in 0..self.evaluations.domain().size() {
             if i == index {
                 continue;
             }
             let i_f = self.index_to_point(i);
+            let i_eval = if i >= self.max { F::zero() } else { self[i] };
 
-            let sub = self[i] - eval;
+            let sub = i_eval - eval;
             q[i] = sub / (i_f - index_f);
             q[index] +=
                 sub * index_vanishing * precompute.vanishing_inverse_at(i) / (index_f - i_f);
+        }
+
+        q
+    }
+
+    pub(crate) fn divive_by_vanishing_outside_domain(
+        &self,
+        precompute: &PrecomputedLagrange<F>,
+        point: F,
+    ) -> Vec<F> {
+        let mut q = vec![F::zero(); self.domain_size()];
+        //let eval = self.evaluate_outside_domain(precompute, point);
+        let eval = self.evaluate(precompute, point);
+
+        let mut inversions = vec![F::zero(); self.domain_size()];
+        for i in 0..self.domain_size() {
+            inversions[i] = self.index_to_point(i) - point;
+        }
+        batch_inversion(&mut inversions);
+
+        for i in 0..self.domain_size() {
+            let i_eval = if i >= self.max { F::zero() } else { self[i] };
+            q[i] = (i_eval - eval) * inversions[i];
         }
 
         q
@@ -121,6 +156,14 @@ impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D>
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.evaluations[index]
+    }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> Index<&F> for LagrangeBasis<F, D> {
+    type Output = F;
+
+    fn index(&self, index: &F) -> &Self::Output {
+        &self.evaluations[to_usize(index)]
     }
 }
 

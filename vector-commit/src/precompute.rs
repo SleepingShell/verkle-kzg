@@ -12,7 +12,8 @@ use crate::utils::to_usize;
 pub struct PrecomputedLagrange<F: FftField> {
     size: usize,
 
-    unity: F,
+    //unity: F,
+    domain: GeneralEvaluationDomain<F>,
 
     vanishing_evaluations: Vec<F>,
 
@@ -22,25 +23,25 @@ pub struct PrecomputedLagrange<F: FftField> {
 
 impl<F: PrimeField> PrecomputedLagrange<F> {
     pub(crate) fn new(size: usize) -> Self {
-        let unity = GeneralEvaluationDomain::<F>::new(size).unwrap().group_gen();
-        let (evals, inv) = Self::compute_vanishing_evaluations(size, &unity);
+        let domain = GeneralEvaluationDomain::<F>::new(size).unwrap();
+        let (evals, inv) = Self::compute_vanishing_evaluations(size, &domain.group_gen());
         Self {
             size,
-            unity,
+            domain,
             vanishing_evaluations: evals,
             vanishing_evaluations_inv: inv,
         }
     }
 
-    pub(crate) fn new_with_unity(size: usize, unity: F) -> Self {
-        let (evals, inv) = Self::compute_vanishing_evaluations(size, &unity);
-        Self {
-            size,
-            unity,
-            vanishing_evaluations: evals,
-            vanishing_evaluations_inv: inv,
-        }
-    }
+    // pub(crate) fn new_with_unity(size: usize, unity: F) -> Self {
+    //     let (evals, inv) = Self::compute_vanishing_evaluations(size, &unity);
+    //     Self {
+    //         size,
+    //         unity,
+    //         vanishing_evaluations: evals,
+    //         vanishing_evaluations_inv: inv,
+    //     }
+    // }
 
     fn compute_vanishing_evaluations(size: usize, unity: &F) -> (Vec<F>, Vec<F>) {
         let mut evals = vec![F::zero(); size];
@@ -71,22 +72,27 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
     pub(crate) fn compute_barycentric_coefficients(&self, point: F) -> Vec<F> {
         let mut res = vec![F::zero(); self.size];
         if point < F::from(self.size as u64) {
-            let point_usize = to_usize(point);
+            let point_usize = to_usize(&point);
             res[point_usize] = F::one();
             return res;
         }
 
+        let unity = self.domain.group_gen();
+
         // t is the constant outside the summation in PCS multiproofs article
         let t = (point.pow(&[self.size as u64]) - F::one()) / F::from(self.size as u64);
         for i in 0..self.size {
-            let pow = self.unity.pow(&[i as u64]);
+            let pow = unity.pow(&[i as u64]);
             res[i] = (t * pow) / (point - pow);
         }
 
         res
     }
 
-    pub(crate) fn unity(&self) -> F {
-        self.unity
+    // pub(crate) fn unity(&self) -> F {
+    //     self.unity
+    // }
+    pub(crate) fn domain(&self) -> &GeneralEvaluationDomain<F> {
+        &self.domain
     }
 }

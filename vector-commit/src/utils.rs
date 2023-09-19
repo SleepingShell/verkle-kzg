@@ -64,6 +64,6 @@ pub(crate) fn max<'a, T: Ord>(l: &'a T, r: &'a T) -> &'a T {
     }
 }
 
-pub(crate) fn to_usize<T: PrimeField>(x: T) -> usize {
+pub(crate) fn to_usize<T: PrimeField>(x: &T) -> usize {
     x.into_bigint().as_ref()[0] as usize
 }

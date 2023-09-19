@@ -51,7 +51,7 @@ where
             g1,
             lagrange_commitments: lagrange_g1,
             g2,
-            precompute: PrecomputedLagrange::new_with_unity(size, unity),
+            precompute: PrecomputedLagrange::new(size),
         }
     }
 }
@@ -123,13 +123,6 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         key: &Self::UniversalParams,
         data: &crate::lagrange_basis::LagrangeBasis<E::ScalarField, D>,
     ) -> Result<Self::Commitment, Self::Error> {
-        // TODO: Not working when CRS and dataset are different lengths
-        println!(
-            "yooo {}",
-            inner_product(&key.g1, data.interpolate().coeffs())
-                == inner_product(&key.lagrange_commitments, data.elements_ref(),)
-        );
-        //Ok(inner_product(&key.g1, data.interpolate().coeffs()))
         Ok(inner_product(
             &key.lagrange_commitments,
             data.elements_ref(),
@@ -145,14 +138,9 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
     ) -> Result<Self::Proof, Self::Error> {
         let evaluation = data.evaluate(key.precompute(), point);
         let q = if point <= E::ScalarField::from(key.max_size() as u64) {
-            data.divide_by_vanishing(key.precompute(), to_usize(point))
+            data.divide_by_vanishing(key.precompute(), to_usize(&point))
         } else {
-            //FIXME: not working
-            let p = key.precompute().unity().pow(&[to_usize(point) as u64]);
-            data.elements()
-                .enumerate()
-                .map(|(i, v)| *v / (data.index_to_point(i) - p))
-                .collect()
+            data.divive_by_vanishing_outside_domain(key.precompute(), point)
         };
 
         Ok(KZGProof {
@@ -177,7 +165,16 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         proof: &Self::Proof,
         transcript: Option<Self::Transcript>,
     ) -> Result<bool, Self::Error> {
-        let p = key.precompute().unity().pow(&[to_usize(point) as u64]);
+        let p = if point < E::ScalarField::from(key.max_size() as u64) {
+            //key.precompute().unity().pow(&[to_usize(point) as u64])
+            key.precompute()
+                .domain()
+                .group_gen()
+                .pow(&[to_usize(&point) as u64])
+        } else {
+            point
+        };
+
         let pairing1 = E::pairing(proof.proof, key.g2 - (E::G2::generator() * p));
         let pairing2 = E::pairing(
             *commitment - (E::G1::generator() * proof.y),
@@ -216,7 +213,7 @@ mod tests {
     type TKZG = KZG<Bn254, Hasher, GeneralEvaluationDomain<F>>;
 
     const DATA_SIZE: usize = 8;
-    const MAX_CRS: usize = 32;
+    const MAX_CRS: usize = 16;
 
     fn gen_data(num: usize) -> Vec<F> {
         let mut data: Vec<F> = vec![];
@@ -232,7 +229,7 @@ mod tests {
         let point_gen = KZGRandomPointGenerator::<G1>::default();
 
         let crs = TKZG::setup(max_degree, &point_gen).unwrap();
-        let prep = LagrangeBasis::from_vec(data);
+        let prep = LagrangeBasis::from_vec_and_domain(data, *crs.precompute().domain());
 
         (prep, crs)
     }
@@ -246,5 +243,15 @@ mod tests {
             let proof = TKZG::prove(&crs, &commit, i, &data).unwrap();
             assert!(TKZG::verify(&crs, &commit, i, &proof).unwrap());
         }
+
+        for i in DATA_SIZE..MAX_CRS {
+            let proof = TKZG::prove(&crs, &commit, i, &data).unwrap();
+            assert!(TKZG::verify(&crs, &commit, i, &proof).unwrap());
+            assert!(proof.y == F::zero());
+        }
+
+        let outside_index = MAX_CRS + 1;
+        let outside_proof = TKZG::prove(&crs, &commit, outside_index, &data).unwrap();
+        assert!(TKZG::verify(&crs, &commit, outside_index, &outside_proof).unwrap());
     }
 }
