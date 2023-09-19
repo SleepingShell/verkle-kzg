@@ -45,12 +45,10 @@ pub(crate) fn powers_of<T: Mul<T, Output = T> + One + Copy>(a: T, n: usize) -> V
     res
 }
 
-pub(crate) fn invert_domain_at<const N: usize, F: Field>(t: F) -> [F; N] {
-    let mut res: [F; N] = (0..N as u64)
-        .map(|i| t - F::from(i))
-        .collect::<Vec<F>>()
-        .try_into()
-        .unwrap();
+pub(crate) fn invert_domain_at<F: Field>(t: F, N: usize) -> Vec<F> {
+    let mut res: Vec<F> = (0..N as u64).map(|i| t - F::from(i)).collect::<Vec<F>>();
+    //.try_into()
+    //.unwrap();
     batch_inversion(&mut res);
 
     res

@@ -14,7 +14,7 @@ use crate::{
 
 use self::kzg_point_generator::KZGRandomPointGenerator;
 
-mod kzg_point_generator;
+pub mod kzg_point_generator;
 
 pub type KZGCommitment<G: Group> = G;
 

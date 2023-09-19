@@ -38,7 +38,7 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
                 vec![F::zero(); size],
                 D::new(size).unwrap(),
             ),
-            max: 0,
+            max: size,
         }
     }
 

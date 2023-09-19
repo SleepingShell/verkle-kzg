@@ -5,7 +5,7 @@ use std::{
     ops::{Mul, Sub},
 };
 
-use ark_ec::{CurveGroup, Group};
+use ark_ec::{pairing::Pairing, CurveGroup, Group};
 use ark_ff::{field_hashers::HashToField, One, Zero};
 use ark_poly::EvaluationDomain;
 use ark_serialize::CanonicalSerialize;
@@ -15,6 +15,7 @@ use rayon::prelude::*;
 
 use crate::{
     ipa::IPA,
+    kzg::KZG,
     lagrange_basis::LagrangeBasis,
     transcript::Transcript,
     utils::{invert_domain_at, powers_of},
@@ -56,8 +57,7 @@ pub struct Multiproof<P, D> {
     d: D,
 }
 
-pub trait VectorCommitmentMultiproof<const N: usize, G, D>:
-    VectorCommitment<G::ScalarField, D>
+pub trait VectorCommitmentMultiproof<G, D>: VectorCommitment<G::ScalarField, D>
 where
     G: Group,
     D: EvaluationDomain<G::ScalarField> + Sync + Send,
@@ -102,22 +102,19 @@ where
         let queries_by_point = scaled_queries.iter().into_group_map_by(|q| q.0);
 
         // Compute g(x)
-        let mut g = LagrangeBasis::new_zero(N);
+        let mut g = LagrangeBasis::new_zero(key.max_size());
         let quotients: Vec<LagrangeBasis<G::ScalarField, D>> = queries_by_point
             .iter()
             //.par_bridge()
             .map(|(point, queries)| {
-                let mut total = LagrangeBasis::new_zero(N);
+                let mut total = LagrangeBasis::new_zero(key.max_size());
                 queries.iter().for_each(|q| {
-                    //q.1.iter().enumerate().for_each(|(i, x)| total[i] += x);
                     total += &q.1;
                 });
 
-                //IPAPreparedData::<N, G::ScalarField>::new_incremental(total.to_vec())
-                //    .divide_by_vanishing(&key.precompute, *point)
                 LagrangeBasis::from_vec_and_domain(
                     total.divide_by_vanishing(key.precompute(), *point),
-                    D::new(N).unwrap(),
+                    D::new(key.max_size()).unwrap(),
                 )
             })
             .collect();
@@ -134,10 +131,10 @@ where
         let t = transcript.digest("t", true);
 
         // Calculate all the t-z_i inversions at once
-        let inversions = invert_domain_at::<N, G::ScalarField>(t);
+        let inversions = invert_domain_at::<G::ScalarField>(t, key.max_size());
 
         // Calculate h(x)
-        let mut h = LagrangeBasis::new_zero(N);
+        let mut h = LagrangeBasis::new_zero(key.max_size());
         for (point, queries) in queries_by_point.iter() {
             for q in queries {
                 h += &(&q.1 * inversions[*point]);
@@ -175,7 +172,7 @@ where
         let mut r_pow = G::ScalarField::one();
         let mut e_coeffs = HashMap::<&Self::Commitment, G::ScalarField>::new();
 
-        let inversions = invert_domain_at::<N, G::ScalarField>(t);
+        let inversions = invert_domain_at::<G::ScalarField>(t, key.max_size());
 
         for query in queries {
             let e_coeff = r_pow * inversions[query.z];
@@ -195,7 +192,7 @@ where
     }
 }
 
-impl<const N: usize, G, H, D> VectorCommitmentMultiproof<N, G, D> for IPA<N, G, H, D>
+impl<const N: usize, G, H, D> VectorCommitmentMultiproof<G, D> for IPA<N, G, H, D>
 where
     G: CurveGroup,
     H: HashToField<G::ScalarField> + Sync,
@@ -203,10 +200,21 @@ where
 {
 }
 
+impl<E, H, D> VectorCommitmentMultiproof<E::G1, D> for KZG<E, H, D>
+where
+    E: Pairing,
+    H: HashToField<E::ScalarField> + Sync,
+    D: EvaluationDomain<E::ScalarField> + Sync + Send,
+{
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipa::{IPACommitment, IPAPointGenerator, IPA};
+    use crate::{
+        ipa::{IPACommitment, IPAPointGenerator, IPA},
+        kzg::kzg_point_generator::KZGRandomPointGenerator,
+    };
 
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
@@ -223,6 +231,7 @@ mod tests {
 
     const SIZE: usize = 32;
     type IPAT = IPA<SIZE, G, Hasher, GeneralEvaluationDomain<F>>;
+    type KZGT = KZG<Bn254, Hasher, GeneralEvaluationDomain<F>>;
 
     #[test]
     fn test_ipa_multiproof() {
@@ -267,6 +276,55 @@ mod tests {
         proof.d -= G::generator();
         verifier_queries[0].y += F::one();
         assert!(!IPAT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
+        verifier_queries[0].y -= F::one();
+        //proof.proof.l[0] += G::generator();
+        //assert!(!IPAT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
+        //proof.proof.l[0] -= G::generator();
+    }
+
+    #[test]
+    fn test_kzg_multiproof() {
+        let NUM_MULTIPROOF = 20;
+        let point_gen = KZGRandomPointGenerator::default();
+        let crs = KZGT::setup(SIZE, &point_gen).unwrap();
+
+        let all_data: Vec<(
+            LagrangeBasis<F, GeneralEvaluationDomain<F>>,
+            IPACommitment<G>,
+        )> = (0..NUM_MULTIPROOF)
+            .map(|_| {
+                let r = F::rand(&mut thread_rng());
+                let data = LagrangeBasis::<F, GeneralEvaluationDomain<F>>::from_vec(
+                    (0..SIZE).map(|i| r + F::from(i as u64)).collect(),
+                );
+                let commit = KZGT::commit(&crs, &data).unwrap();
+
+                (data, commit)
+            })
+            .collect();
+
+        let queries: Vec<_> = all_data
+            .iter()
+            .map(|(data, commit)| {
+                let z = thread_rng().gen_range(0..SIZE);
+                MultiproofProverQuery {
+                    commit: commit,
+                    data: data,
+                    z: z,
+                    y: data[z],
+                }
+            })
+            .collect();
+        let mut verifier_queries: Vec<_> = queries.iter().map(|q| q.to_verifier_query()).collect();
+
+        let mut proof = KZGT::prove_multiproof(&crs, &queries).unwrap();
+
+        assert!(KZGT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
+        proof.d += G::generator();
+        assert!(!KZGT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
+        proof.d -= G::generator();
+        verifier_queries[0].y += F::one();
+        assert!(!KZGT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
         verifier_queries[0].y -= F::one();
         //proof.proof.l[0] += G::generator();
         //assert!(!IPAT::verify_multiproof(&crs, &verifier_queries, &proof).unwrap());
