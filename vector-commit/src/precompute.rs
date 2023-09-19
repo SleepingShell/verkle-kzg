@@ -92,7 +92,7 @@ impl<F: PrimeField> PrecomputedLagrange<F> {
     // pub(crate) fn unity(&self) -> F {
     //     self.unity
     // }
-    pub(crate) fn domain(&self) -> &GeneralEvaluationDomain<F> {
+    pub fn domain(&self) -> &GeneralEvaluationDomain<F> {
         &self.domain
     }
 }

@@ -95,7 +95,7 @@ fn bench_prove_multiproof(c: &mut Criterion) {
             let challenge = rng.gen_range(0..SIZE);
             let eval = data[challenge];
             if i % (max / 10) == 0 {
-                println!("{}% data generated", 10 * (i / max));
+                println!("{}% data generated", (i * 100 / max));
             }
             (data, commit, challenge, eval)
         })
@@ -133,7 +133,7 @@ fn bench_verify_multiproof(c: &mut Criterion) {
             let challenge = rng.gen_range(0..SIZE);
             let eval = data[challenge];
             if i % (max / 10) == 0 {
-                println!("{}% data generated", 10 * (i / max));
+                println!("{}% data generated", (i * 100 / max));
             }
             (data, commit, challenge, eval)
         })
@@ -159,7 +159,7 @@ fn bench_verify_multiproof(c: &mut Criterion) {
 }
 
 criterion_group! {
-    name = proofs;
+    name = ipa_proofs;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
     targets = bench_commitment,
     bench_prove_single,
@@ -167,4 +167,4 @@ criterion_group! {
     bench_prove_multiproof,
     bench_verify_multiproof
 }
-criterion_main!(proofs);
+criterion_main!(ipa_proofs);
