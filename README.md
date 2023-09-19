@@ -9,7 +9,7 @@ Many (and the ones in this repository) of VCS are built on Polynomial Commitment
 
 Polynomials are usually presented in coefficient form $f(x) = a_0 + a_1x + a_2x^2...a_dx^{d-1}$. However, for the VCS it is more natural, and in fact more efficient, to represent these polynomials in *evaluation* form, which is to say simply the vector of data itself: $\overrightarrow{v} = <y_0, y_1,...,y_d>$ where we assume the domain (points of evaluation) are simply incrementing starting from 0, so $f(x_0) = y_0$. One can use Lagrange interpolation [[2]]([2]) to find the polynomial that intersects all points in $v$ with degree $d-1$. When the points of evaluation are at the $d$th roots of unity [[3]]([3]), the FFT [[4]]([4]) can be used to efficiently switch between these forms.
 
-**A note on polynomial division:** A polynomial is divisible by $X-z$ if it has a zero at $z$, and the converse is true in that if a polynomial is divisible by $X-z$ with no remainder, than it is zero at $z$.
+**A note on polynomial division:** A polynomial is divisible by $X-z$ if it has a zero at $z$, and the converse is true in that if a polynomial is divisible by $X-z$ with no remainder, then it is zero at $z$.
 
 ## Verkle Tree
 
@@ -60,10 +60,17 @@ What this is proving is that the following equation holds, evaluated at the secr
 
 # References
 <a id="1">[1]</a> https://dankradfeist.de/ethereum/2021/07/27/inner-product-arguments.html
+
 <a id="2">[2]</a> https://en.wikipedia.org/wiki/Lagrange_polynomial
+
 <a id="3">[3]</a> https://en.wikipedia.org/wiki/Root_of_unity
+
 <a id="4">[4]</a> https://en.wikipedia.org/wiki/Fast_Fourier_transform
+
 <a id="5">[5]</a> https://en.wikipedia.org/wiki/Fiat%E2%80%93Shamir_heuristic
+
 <a id="6">[6]</a> https://ethereum.org/en/roadmap/danksharding/
+
 <a id="7">[7]</a> https://dankradfeist.de/ethereum/2020/06/16/kate-polynomial-commitments.html
+
 <a id="8">[8]</a> https://dankradfeist.de/ethereum/2021/06/18/pcs-multiproofs.html
