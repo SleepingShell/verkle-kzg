@@ -2,14 +2,17 @@ use std::marker::PhantomData;
 
 use ark_ec::{pairing::Pairing, Group};
 use ark_ff::{field_hashers::HashToField, FftField, Field, One, PrimeField, Zero};
-use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain};
+use ark_poly::{
+    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+    Polynomial,
+};
 use thiserror::Error;
 
 use crate::{
     precompute::PrecomputedLagrange,
     transcript::TranscriptHasher,
-    utils::{inner_product, to_usize},
-    PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
+    utils::{elementwise_mul, inner_product, to_usize},
+    LagrangeBasis, PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
 };
 
 use self::kzg_point_generator::KZGRandomPointGenerator;
@@ -24,9 +27,6 @@ pub type KZGCommitment<G: Group> = G;
 pub struct KZGKey<F: FftField, G1: Group, G2: Group> {
     /// The max number of elements this reference string supports
     size: usize,
-
-    /// TEMP
-    g1: Vec<G1>,
 
     /// The corresponding `PointGenerator` should commit directly to the lagrange polynomials
     /// as we work in evaluation form.
@@ -44,11 +44,10 @@ where
     G1: Group<ScalarField = F>,
     G2: Group<ScalarField = F>,
 {
-    fn from_lagrange_vec(g1: Vec<G1>, lagrange_g1: Vec<G1>, g2: G2, unity: F) -> Self {
-        let size = g1.len();
+    fn from_lagrange_vec(lagrange_g1: Vec<G1>, g2: G2, unity: F) -> Self {
+        let size = lagrange_g1.len();
         Self {
             size,
-            g1,
             lagrange_commitments: lagrange_g1,
             g2,
             precompute: PrecomputedLagrange::new(size),
@@ -80,7 +79,8 @@ pub struct KZGProof<F: Field, G: Group> {
 pub enum KZGError {
     #[error("An unspecified error occurred")]
     DefaultError,
-    //InvalidDomain,
+    #[error("Cannot create the requested domain size")]
+    InvalidDomain,
     //OutOfDomainBounds,
 }
 
@@ -111,17 +111,12 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         let domain = D::new(max_items).unwrap();
         let points = domain.ifft(&g1_points);
         let g2 = E::G2::generator() * gen.secret().unwrap();
-        Ok(KZGKey::from_lagrange_vec(
-            g1_points,
-            points,
-            g2,
-            domain.group_gen(),
-        ))
+        Ok(KZGKey::from_lagrange_vec(points, g2, domain.group_gen()))
     }
 
     fn commit(
         key: &Self::UniversalParams,
-        data: &crate::lagrange_basis::LagrangeBasis<E::ScalarField, D>,
+        data: &LagrangeBasis<E::ScalarField, D>,
     ) -> Result<Self::Commitment, Self::Error> {
         Ok(inner_product(
             &key.lagrange_commitments,
@@ -133,7 +128,7 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
         point: E::ScalarField,
-        data: &crate::lagrange_basis::LagrangeBasis<E::ScalarField, D>,
+        data: &LagrangeBasis<E::ScalarField, D>,
         transcript: Option<Self::Transcript>,
     ) -> Result<Self::Proof, Self::Error> {
         let evaluation = data.evaluate(key.precompute(), point);
@@ -153,7 +148,7 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         key: &Self::UniversalParams,
         commitment: &Self::Commitment,
         indexes: Vec<usize>,
-        data: &crate::lagrange_basis::LagrangeBasis<E::ScalarField, D>,
+        data: &LagrangeBasis<E::ScalarField, D>,
     ) -> Result<Self::BatchProof, Self::Error> {
         todo!()
     }
@@ -190,6 +185,43 @@ impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarFi
         proof: &Self::BatchProof,
     ) -> Result<bool, Self::Error> {
         todo!()
+    }
+}
+
+impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarField>> KZG<E, H, D> {
+    fn prove_all_points(
+        key: &KZGKey<E::ScalarField, E::G1, E::G2>,
+        data: &LagrangeBasis<E::ScalarField, D>,
+    ) -> Result<Vec<KZGProof<E::ScalarField, E::G1>>, KZGError> {
+        let poly = data.interpolate();
+        let coeffs = poly.coeffs();
+        let degree = poly.degree();
+        let domain = D::new(degree * 2).ok_or(KZGError::InvalidDomain)?;
+
+        let mut c_hat = vec![coeffs[degree]];
+        c_hat.extend(vec![E::ScalarField::zero(); degree + 1]);
+        c_hat.extend(&coeffs[0..degree]);
+
+        // Use iFFT to transform the lagrange commitments back to their non-lagrange counterparts
+        let g1 = key.precompute().domain().ifft(&key.lagrange_commitments);
+        let mut s_hat = g1[0..degree].to_vec();
+        s_hat.reverse();
+        s_hat.extend(vec![E::G1::zero(); domain.size() - degree]);
+
+        let y = domain.fft(&c_hat);
+        let v = domain.fft(&s_hat);
+        let u = elementwise_mul(&v, &y);
+
+        let h_hat = domain.ifft(&u);
+
+        Ok(h_hat
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| KZGProof {
+                proof: p,
+                y: data[i],
+            })
+            .collect())
     }
 }
 
@@ -253,5 +285,16 @@ mod tests {
         let outside_index = MAX_CRS + 1;
         let outside_proof = TKZG::prove(&crs, &commit, outside_index, &data).unwrap();
         assert!(TKZG::verify(&crs, &commit, outside_index, &outside_proof).unwrap());
+    }
+
+    fn test_amortized_proof() {
+        let (data, crs) = setup(DATA_SIZE, MAX_CRS);
+        let commit = TKZG::commit(&crs, &data).unwrap();
+
+        let proofs = TKZG::prove_all_points(&crs, &data).unwrap();
+
+        for i in 0..DATA_SIZE {
+            assert!(TKZG::verify(&crs, &commit, i, &proofs[i]).unwrap())
+        }
     }
 }

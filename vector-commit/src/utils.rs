@@ -18,6 +18,15 @@ pub(crate) fn inner_product<R: Copy, T: Mul<R, Output = T> + Sum<T> + Copy>(a: &
     //b.iter().enumerate().map(|(i, r)| a[i] * *r).sum()
 }
 
+pub(crate) fn elementwise_mul<'a, R, T: Mul<&'a R, Output = T> + Copy>(
+    a: &[T],
+    b: &'a [R],
+) -> Vec<T> {
+    let mut res: Vec<T> = Vec::with_capacity(a.len());
+    a.iter().zip(b.iter()).for_each(|(a, b)| res.push(*a * b));
+    res
+}
+
 //res_i = a_i + x*b_i
 pub(crate) fn vec_add_and_distribute<R: Copy, T: Copy + Add<T, Output = T> + Mul<R, Output = T>>(
     a: &[T],
