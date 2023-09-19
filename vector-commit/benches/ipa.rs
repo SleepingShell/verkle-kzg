@@ -1,4 +1,5 @@
 use ark_poly::GeneralEvaluationDomain;
+use once_cell::sync::Lazy;
 use pprof::criterion::{Output, PProfProfiler};
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
@@ -15,12 +16,40 @@ use ark_ff::{field_hashers::DefaultFieldHasher, PrimeField, UniformRand};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 const SIZE: usize = 256;
+const MAX_MULTIPROOF: usize = 2usize.pow(14);
 
 type F = <Bn254 as Pairing>::ScalarField;
 type G1 = <Bn254 as Pairing>::G1;
 type Hasher = DefaultFieldHasher<Sha256>;
+type D = GeneralEvaluationDomain<F>;
 
 type IPAT = IPA<256, G1, Hasher, GeneralEvaluationDomain<F>>;
+
+struct TestData {
+    crs: IPAUniversalParams<SIZE, G1, Hasher>,
+    data: Vec<(LagrangeBasis<F, D>, IPACommitment<G1>, usize, F)>,
+}
+
+static DATA: Lazy<TestData> = Lazy::new(|| {
+    let mut rng = thread_rng();
+    let mut point_gen = IPAPointGenerator::default();
+    point_gen.set_max(512);
+    let crs = IPAT::setup(SIZE, &point_gen).unwrap();
+    let data = (0..MAX_MULTIPROOF as usize)
+        .map(|i| {
+            let data = gen_data(SIZE);
+            let commit = IPAT::commit(&crs, &data).unwrap();
+            let challenge = rng.gen_range(0..SIZE);
+            let eval = data[challenge];
+            if i % (MAX_MULTIPROOF / 10) == 0 {
+                println!("{}% data generated", (i * 100 / MAX_MULTIPROOF));
+            }
+            (data, commit, challenge, eval)
+        })
+        .collect::<Vec<_>>();
+
+    TestData { crs, data }
+});
 
 fn gen_data(num: usize) -> LagrangeBasis<F, GeneralEvaluationDomain<F>> {
     let mut data: Vec<F> = vec![];
@@ -80,14 +109,11 @@ fn bench_verify_single(c: &mut Criterion) {
 }
 
 fn bench_prove_multiproof(c: &mut Criterion) {
-    let base = 32;
-    let max = base * 512;
-    let mut rng = rand::thread_rng();
-    let (_, crs) = setup(SIZE, SIZE);
-
+    let base = MAX_MULTIPROOF / 8;
     let mut group = c.benchmark_group("ipa_multiproof_prove");
     group.sample_size(10);
 
+    /*
     let all_data = (0..max as usize)
         .map(|i| {
             let data = gen_data(SIZE);
@@ -100,59 +126,48 @@ fn bench_prove_multiproof(c: &mut Criterion) {
             (data, commit, challenge, eval)
         })
         .collect::<Vec<_>>();
-    let queries = all_data
+    */
+
+    let queries = DATA
+        .data
         .iter()
         .map(|(d, c, z, y)| MultiproofProverQuery::new(d, c, *z, *y))
         .collect::<Vec<_>>();
 
-    for size in [base, base * 64, max].iter() {
+    for size in [base, base * 4, base * 8].iter() {
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
             &queries[0..*size],
             |b, q| {
-                b.iter(|| IPAT::prove_multiproof(&crs, q));
+                b.iter(|| IPAT::prove_multiproof(&DATA.crs, q));
             },
         );
     }
 }
 
 fn bench_verify_multiproof(c: &mut Criterion) {
-    let base = 32;
-    let max = base * 512;
-    let mut rng = rand::thread_rng();
-    let (_, crs) = setup(SIZE, SIZE);
+    let base = MAX_MULTIPROOF / 8;
 
     let mut group = c.benchmark_group("ipa_multiproof_verify");
     group.sample_size(10);
 
-    let all_data = (0..max as usize)
-        .map(|i| {
-            let data = gen_data(SIZE);
-            let commit = IPAT::commit(&crs, &data).unwrap();
-            let challenge = rng.gen_range(0..SIZE);
-            let eval = data[challenge];
-            if i % (max / 10) == 0 {
-                println!("{}% data generated", (i * 100 / max));
-            }
-            (data, commit, challenge, eval)
-        })
-        .collect::<Vec<_>>();
-    let queries: Vec<_> = all_data
+    let queries: Vec<_> = DATA
+        .data
         .iter()
         .map(|(d, c, z, y)| MultiproofProverQuery::new(d, c, *z, *y))
         .collect();
     let verifier_queries: Vec<_> = queries.iter().map(|q| q.to_verifier_query()).collect();
 
-    for size in [base, base * 64, max].iter() {
-        let proof = IPAT::prove_multiproof(&crs, &queries[0..*size]).unwrap();
+    for size in [base, base * 4, base * 8].iter() {
+        let proof = IPAT::prove_multiproof(&DATA.crs, &queries[0..*size]).unwrap();
 
         group.throughput(criterion::Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
             &(&verifier_queries[0..*size], &proof),
             |b, (q, p)| {
-                b.iter(|| IPAT::verify_multiproof(&crs, *q, *p));
+                b.iter(|| IPAT::verify_multiproof(&DATA.crs, *q, *p));
             },
         );
     }
