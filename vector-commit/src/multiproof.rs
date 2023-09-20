@@ -69,6 +69,7 @@ where
         + Sum
         + Copy
         + Sync,
+    <Self as VectorCommitment<G::ScalarField, D>>::UniversalParams: Sync,
 {
     /// Create a multiproof that proves multiple datasets at (possibly) multiple different evaluation points
     fn prove_multiproof<'a>(
@@ -105,7 +106,7 @@ where
         let mut g = LagrangeBasis::new_zero(key.max_size());
         let quotients: Vec<LagrangeBasis<G::ScalarField, D>> = queries_by_point
             .iter()
-            //.par_bridge()
+            .par_bridge()
             .map(|(point, queries)| {
                 let mut total = LagrangeBasis::new_zero(key.max_size());
                 queries.iter().for_each(|q| {

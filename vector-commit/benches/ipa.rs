@@ -16,7 +16,7 @@ use ark_ff::{field_hashers::DefaultFieldHasher, PrimeField, UniformRand};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 const SIZE: usize = 256;
-const MAX_MULTIPROOF: usize = 2usize.pow(14);
+const MAX_MULTIPROOF: usize = 2usize.pow(15);
 
 type F = <Bn254 as Pairing>::ScalarField;
 type G1 = <Bn254 as Pairing>::G1;
@@ -112,21 +112,6 @@ fn bench_prove_multiproof(c: &mut Criterion) {
     let base = MAX_MULTIPROOF / 8;
     let mut group = c.benchmark_group("ipa_multiproof_prove");
     group.sample_size(10);
-
-    /*
-    let all_data = (0..max as usize)
-        .map(|i| {
-            let data = gen_data(SIZE);
-            let commit = IPAT::commit(&crs, &data).unwrap();
-            let challenge = rng.gen_range(0..SIZE);
-            let eval = data[challenge];
-            if i % (max / 10) == 0 {
-                println!("{}% data generated", (i * 100 / max));
-            }
-            (data, commit, challenge, eval)
-        })
-        .collect::<Vec<_>>();
-    */
 
     let queries = DATA
         .data
