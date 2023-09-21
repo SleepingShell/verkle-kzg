@@ -10,7 +10,7 @@ pub enum TranscriptError {
     InvalidSerialize,
 }
 
-pub trait Transcript<F: Field> {
+pub trait Transcript<F> {
     /// Initialize a new hasher with a domain separator `label`
     fn new(label: &str) -> Self;
 

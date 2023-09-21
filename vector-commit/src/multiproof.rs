@@ -6,7 +6,7 @@ use std::{
 };
 
 use ark_ec::{pairing::Pairing, CurveGroup, Group};
-use ark_ff::{field_hashers::HashToField, One, Zero};
+use ark_ff::{field_hashers::HashToField, One, PrimeField, Zero};
 use ark_poly::EvaluationDomain;
 use ark_serialize::CanonicalSerialize;
 
@@ -19,7 +19,7 @@ use crate::{
     lagrange_basis::LagrangeBasis,
     transcript::Transcript,
     utils::{invert_domain_at, powers_of},
-    VCUniversalParams, VectorCommitment,
+    HasPrecompute, VCData, VCUniversalParams, VectorCommitment,
 };
 
 #[derive(Clone)]
@@ -57,19 +57,20 @@ pub struct Multiproof<P, D> {
     d: D,
 }
 
-pub trait VectorCommitmentMultiproof<G, D>: VectorCommitment<G::ScalarField, D>
+pub trait VectorCommitmentMultiproof<G, D>:
+    VectorCommitment<Data = LagrangeBasis<G::ScalarField, D>>
 where
     G: Group,
     D: EvaluationDomain<G::ScalarField> + Sync + Send,
-    <Self as VectorCommitment<G::ScalarField, D>>::Commitment: CanonicalSerialize
-        + Sub<Output = <Self as VectorCommitment<G::ScalarField, D>>::Commitment>
+    <Self as VectorCommitment>::Commitment: CanonicalSerialize
+        + Sub<Output = <Self as VectorCommitment>::Commitment>
         + Eq
         + Hash
         + Mul<G::ScalarField, Output = Self::Commitment>
         + Sum
         + Copy
         + Sync,
-    <Self as VectorCommitment<G::ScalarField, D>>::UniversalParams: Sync,
+    <Self as VectorCommitment>::UniversalParams: HasPrecompute<G::ScalarField> + Sync,
 {
     /// Create a multiproof that proves multiple datasets at (possibly) multiple different evaluation points
     fn prove_multiproof<'a>(
@@ -81,8 +82,7 @@ where
             G::ScalarField,
         >],
     ) -> Result<Multiproof<Self::Proof, Self::Commitment>, Self::Error> {
-        let mut transcript =
-            <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("multiproof");
+        let mut transcript = <Self as VectorCommitment>::Transcript::new("multiproof");
         for query in queries.iter() {
             transcript.append(query.commit, "C");
             transcript.append(&query.z, "z");
@@ -157,8 +157,7 @@ where
         queries: &[MultiproofVerifierQuery<'a, Self::Commitment, G::ScalarField>],
         proof: &Multiproof<Self::Proof, Self::Commitment>,
     ) -> Result<bool, Self::Error> {
-        let mut transcript =
-            <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("multiproof");
+        let mut transcript = <Self as VectorCommitment>::Transcript::new("multiproof");
         for query in queries {
             transcript.append(query.commit, "C");
             transcript.append(&query.z, "z");

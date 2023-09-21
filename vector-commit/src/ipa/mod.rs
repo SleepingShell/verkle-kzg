@@ -11,7 +11,7 @@ use crate::{
     precompute::PrecomputedLagrange,
     transcript::{Transcript, TranscriptError, TranscriptHasher},
     utils::*,
-    PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
+    HasPrecompute, PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
 };
 
 mod ipa_point_generator;
@@ -51,13 +51,17 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> IPAUniversalParam
     }
 }
 
-impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> VCUniversalParams<G::ScalarField>
+impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> VCUniversalParams
     for IPAUniversalParams<N, G, D>
 {
     fn max_size(&self) -> usize {
         N
     }
+}
 
+impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> HasPrecompute<G::ScalarField>
+    for IPAUniversalParams<N, G, D>
+{
     fn precompute(&self) -> &PrecomputedLagrange<G::ScalarField> {
         &self.precompute
     }
@@ -97,7 +101,7 @@ pub struct IPA<const N: usize, G, H, D> {
     _d: PhantomData<D>,
 }
 
-impl<const N: usize, G, H, D> VectorCommitment<G::ScalarField, D> for IPA<N, G, H, D>
+impl<const N: usize, G, H, D> VectorCommitment for IPA<N, G, H, D>
 where
     G: CurveGroup,
     H: HashToField<G::ScalarField> + Sync,
@@ -107,6 +111,7 @@ where
     //type PreparedData = IPAPreparedData<N, G::ScalarField>;
     //type PreparedData = LagrangeBasis<G::ScalarField, GeneralEvaluationDomain<G::ScalarField>>;
     type Commitment = IPACommitment<G>;
+    type Data = LagrangeBasis<G::ScalarField, D>;
     type Proof = IPAProof<G>;
     type BatchProof = Vec<Self::Proof>;
     type Error = IPAError;
@@ -202,7 +207,7 @@ where
         let mut l = Vec::<G>::new();
         let mut r = Vec::<G>::new();
 
-        let mut transcript = <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("ipa");
+        let mut transcript = <Self as VectorCommitment>::Transcript::new("ipa");
         transcript.append(commitment, "C");
         let mut ra = transcript.digest("x", true);
 
@@ -238,7 +243,7 @@ where
         let gens = key.g[0..(2usize).pow(proof.l.len() as u32)].to_vec();
         let mut c = commitment.clone();
         let mut points_coeffs = vec![G::ScalarField::one()];
-        let mut transcript = <Self as VectorCommitment<G::ScalarField, D>>::Transcript::new("ipa");
+        let mut transcript = <Self as VectorCommitment>::Transcript::new("ipa");
         transcript.append(commitment, "C");
         let mut ra = transcript.digest("x", true);
 

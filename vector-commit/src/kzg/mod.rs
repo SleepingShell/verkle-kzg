@@ -12,7 +12,8 @@ use crate::{
     precompute::PrecomputedLagrange,
     transcript::TranscriptHasher,
     utils::{elementwise_mul, inner_product, to_usize},
-    LagrangeBasis, PointGenerator, VCCommitment, VCUniversalParams, VectorCommitment,
+    HasPrecompute, LagrangeBasis, PointGenerator, VCCommitment, VCUniversalParams,
+    VectorCommitment,
 };
 
 use self::kzg_point_generator::KZGRandomPointGenerator;
@@ -55,7 +56,7 @@ where
     }
 }
 
-impl<F, G1, G2> VCUniversalParams<F> for KZGKey<F, G1, G2>
+impl<F, G1, G2> VCUniversalParams for KZGKey<F, G1, G2>
 where
     F: PrimeField,
     G1: Group<ScalarField = F>,
@@ -64,7 +65,14 @@ where
     fn max_size(&self) -> usize {
         self.size
     }
+}
 
+impl<F, G1, G2> HasPrecompute<F> for KZGKey<F, G1, G2>
+where
+    F: PrimeField,
+    G1: Group<ScalarField = F>,
+    G2: Group<ScalarField = F>,
+{
     fn precompute(&self) -> &crate::precompute::PrecomputedLagrange<F> {
         &self.precompute
     }
@@ -93,10 +101,11 @@ pub struct KZG<E, H, D> {
 }
 
 impl<E: Pairing, D: EvaluationDomain<E::ScalarField>, H: HashToField<E::ScalarField>>
-    VectorCommitment<E::ScalarField, D> for KZG<E, H, D>
+    VectorCommitment for KZG<E, H, D>
 {
     type UniversalParams = KZGKey<E::ScalarField, E::G1, E::G2>;
     type Commitment = KZGCommitment<E::G1>;
+    type Data = LagrangeBasis<E::ScalarField, D>;
     type Proof = KZGProof<E::ScalarField, E::G1>;
     type BatchProof = Vec<E::G1>;
     type Error = KZGError;

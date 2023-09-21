@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::{
     precompute::PrecomputedLagrange,
     utils::{inner_product, max, to_usize},
+    VCData,
 };
 
 #[derive(Clone)]
@@ -149,6 +150,10 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
     pub(crate) fn interpolate(&self) -> DensePolynomial<F> {
         self.evaluations.interpolate_by_ref()
     }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> VCData for LagrangeBasis<F, D> {
+    type Item = F;
 }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D> {
