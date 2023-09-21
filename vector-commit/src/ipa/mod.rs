@@ -362,6 +362,7 @@ fn low_level_verify_ipa<G: Group<ScalarField = F>, F: PrimeField, T: Transcript<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VCData;
 
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
