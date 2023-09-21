@@ -35,16 +35,24 @@ pub trait HasPrecompute<F: FftField> {
 }
 
 pub trait VCData: Index<usize> {
-    type Item: From<u64>;
+    type Item: From<u64> + Zero;
+
+    fn from_vec(data: Vec<Self::Item>) -> Self;
+
+    fn set_evaluation(&mut self, index: usize, value: Self::Item);
+
+    fn get(&self, index: usize) -> Option<&Self::Item>;
+
+    fn get_all(&self) -> Vec<(usize, &Self::Item)>;
 }
 
 pub trait VCCommitment<F> {
-    fn to_field(&self) -> F;
+    fn to_data_item(&self) -> F;
 }
 
 /// Default implementation when the proof is simply a group element
 impl<G: Group> VCCommitment<G::ScalarField> for G {
-    fn to_field(&self) -> G::ScalarField {
+    fn to_data_item(&self) -> G::ScalarField {
         if self.is_zero() {
             G::ScalarField::ZERO
         } else {

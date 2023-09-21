@@ -1,7 +1,8 @@
-use std::ops::{AddAssign, Index, Mul, MulAssign, Sub};
+use std::ops::{AddAssign, Index, IndexMut, Mul, MulAssign, Sub};
 
 use ark_ff::{batch_inversion, PrimeField};
 use ark_poly::{univariate::DensePolynomial, EvaluationDomain, Evaluations};
+use itertools::Itertools;
 use thiserror::Error;
 
 use crate::{
@@ -20,11 +21,6 @@ pub struct LagrangeBasis<F: PrimeField, D: EvaluationDomain<F>> {
 }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
-    pub fn from_vec(data: Vec<F>) -> Self {
-        let len = data.len();
-        Self::from_vec_and_domain(data, D::new(len).unwrap())
-    }
-
     pub fn from_vec_and_domain(data: Vec<F>, domain: D) -> Self {
         let max = data.len();
         Self {
@@ -154,6 +150,27 @@ impl<F: PrimeField, D: EvaluationDomain<F>> LagrangeBasis<F, D> {
 
 impl<F: PrimeField, D: EvaluationDomain<F>> VCData for LagrangeBasis<F, D> {
     type Item = F;
+
+    fn from_vec(data: Vec<F>) -> Self {
+        let len = data.len();
+        Self::from_vec_and_domain(data, D::new(len).unwrap())
+    }
+
+    fn set_evaluation(&mut self, index: usize, value: Self::Item) {
+        self[index] = value;
+    }
+
+    fn get(&self, index: usize) -> Option<&Self::Item> {
+        if index < self.max {
+            Some(&self[index])
+        } else {
+            None
+        }
+    }
+
+    fn get_all(&self) -> Vec<(usize, &Self::Item)> {
+        self.evaluations.evals.iter().enumerate().collect_vec()
+    }
 }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D> {
@@ -161,6 +178,12 @@ impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D>
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.evaluations[index]
+    }
+}
+
+impl<F: PrimeField, D: EvaluationDomain<F>> IndexMut<usize> for LagrangeBasis<F, D> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.evaluations.evals[index]
     }
 }
 

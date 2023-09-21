@@ -5,7 +5,7 @@ use std::{
 };
 
 use num::Zero;
-use vector_commit::{VCPreparedData, VectorCommitment};
+use vector_commit::{VCCommitment, VCData, VectorCommitment};
 
 /// A Verkle Tree implementation, specifically using Ethereum's stem and extension model.
 /// There are two types of nodes in this model, although I have attempted to leave open easy addition for more types.
@@ -34,17 +34,17 @@ enum Node<const N: usize, K, VC, T>
 where
     K: Key,
     VC: VectorCommitment,
-    VC::PreparedData: VCPreparedData<Item = T>,
+    VC::Data: VCData<Item = T>,
 {
     Internal {
         commit: Option<VC::Commitment>,
-        //vc_data: VC::PreparedData,
+        //vc_data: VC::Data,
         children: HashMap<usize, Node<N, K, VC, T>>,
     },
     Extension {
         stem: K::Stem,
         commit: Option<VC::Commitment>,
-        vc_data: VC::PreparedData,
+        vc_data: VC::Data,
     },
 }
 
@@ -58,7 +58,7 @@ impl<const N: usize, K, VC, T> Node<N, K, VC, T>
 where
     K: Key,
     VC: VectorCommitment,
-    VC::PreparedData: VCPreparedData<Item = T>,
+    VC::Data: VCData<Item = T>,
     T: Zero + Clone + PartialEq,
 {
     fn new_extension(stem: K::Stem, values: Vec<(usize, T)>) -> Self {
@@ -68,14 +68,14 @@ where
         Self::Extension {
             stem,
             commit: None,
-            vc_data: <VC::PreparedData as VCPreparedData>::from_vec(vc_vec),
+            vc_data: <VC::Data as VCData>::from_vec(vc_vec),
         }
     }
 
     fn new_internal(nodes: Vec<(usize, Self)>) -> Self {
         Self::Internal {
             commit: None,
-            //vc_data: <VC::PreparedData as VCPreparedData>::from_vec(vec![]),
+            //vc_data: <VC::Data as VCData>::from_vec(vec![]),
             children: nodes.into_iter().map(|v| (v.0, v.1)).collect(),
         }
     }
@@ -95,7 +95,8 @@ where
                 }
                 *commit = None;
                 values.into_iter().for_each(|v| {
-                    vc_data.set_evaluation(v.0, v.1).unwrap();
+                    //TODO: Add check for set_evaluation
+                    vc_data.set_evaluation(v.0, v.1);
                 });
             }
             Self::Internal {
@@ -193,10 +194,10 @@ where
                 let mut vc_vec = vec![T::zero(); N];
                 for (k, child) in children.iter_mut() {
                     let cc = child.gen_commitment(crs)?;
-                    vc_vec[*k] = VC::convert_commitment_to_data(cc);
+                    vc_vec[*k] = cc.to_data_item();
                 }
 
-                let vc_data = <VC::PreparedData as VCPreparedData>::from_vec(vc_vec);
+                let vc_data = <VC::Data as VCData>::from_vec(vc_vec);
                 let c = VC::commit(crs, &vc_data)?;
                 *commit = Some(c);
 
@@ -211,7 +212,7 @@ where
     K: Key,
     VC: VectorCommitment,
     VC::Commitment: Debug,
-    VC::PreparedData: VCPreparedData<Item = T>,
+    VC::Data: VCData<Item = T>,
     T: Display + Zero + PartialEq,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -225,7 +226,7 @@ where
                 f.write_fmt(format_args!("\tCommit: {:?}\n", commit))?;
                 f.write_fmt(format_args!("\tChildren: {{\n"))?;
                 for (i, c) in vc_data.get_all() {
-                    if c != T::zero() {
+                    if *c != T::zero() {
                         f.write_fmt(format_args!("({},{})\n", i, c))?;
                     }
                 }
@@ -250,7 +251,7 @@ where
     K: Key,
     VC: VectorCommitment,
     VC::Commitment: Debug,
-    VC::PreparedData: VCPreparedData<Item = T>,
+    VC::Data: VCData<Item = T>,
     T: Zero + Clone + PartialEq + Display,
 {
     root: Node<N, K, VC, T>,
@@ -261,7 +262,7 @@ where
     K: Key,
     VC: VectorCommitment,
     VC::Commitment: Debug,
-    VC::PreparedData: VCPreparedData<Item = T>,
+    VC::Data: VCData<Item = T>,
     T: Zero + Clone + PartialEq + Display,
 {
     fn new() -> Self {
@@ -319,11 +320,14 @@ impl<const F: usize, const S: usize> Key for VanillaKey<F, S> {
 #[cfg(test)]
 mod tests {
     use ark_ec::pairing::Pairing;
+    use ark_ff::field_hashers::DefaultFieldHasher;
+    use ark_poly::GeneralEvaluationDomain;
     use rand::{seq::SliceRandom, Rng};
+    use sha2::Sha256;
 
     use super::*;
     use ark_bn254::Bn254;
-    use vector_commit::kzg_amortized::KZGAmortized;
+    use vector_commit::kzg::{kzg_point_generator::KZGRandomPointGenerator, KZG};
 
     const KEY_LEN: usize = 3;
     const ARITY: usize = 10;
@@ -331,8 +335,11 @@ mod tests {
     type TestFullKey = <TestKey as Key>::FullKey;
 
     type F = <Bn254 as Pairing>::ScalarField;
-    type KZG = KZGAmortized<Bn254>;
-    type TestTree = VerkleTree<ARITY, TestKey, KZG, F>;
+    type G1 = <Bn254 as Pairing>::G1;
+    type Hasher = DefaultFieldHasher<Sha256>;
+
+    type KZGT = KZG<Bn254, Hasher, GeneralEvaluationDomain<F>>;
+    type TestTree = VerkleTree<ARITY, TestKey, KZGT, F>;
 
     fn random_key(arity: usize, prefix: Option<&<TestKey as Key>::Stem>) -> TestFullKey {
         let mut rng = rand::thread_rng();
@@ -415,7 +422,8 @@ mod tests {
     fn test_commitment() {
         let mut rng = rand::thread_rng();
         let mut tree: TestTree = TestTree::new();
-        let crs = KZG::setup(ARITY, &mut rng).unwrap();
+        let point_gen = KZGRandomPointGenerator::<G1>::default();
+        let crs = KZGT::setup(ARITY, &point_gen).unwrap();
 
         let key = random_key(ARITY, None);
         let val: F = rng.gen();
