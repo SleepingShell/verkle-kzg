@@ -7,7 +7,7 @@ use vector_commit::{
     ipa::*,
     lagrange_basis::LagrangeBasis,
     multiproof::{MultiproofProverQuery, MultiproofVerifierQuery, VectorCommitmentMultiproof},
-    VectorCommitment,
+    VCData, VectorCommitment,
 };
 
 use ark_bn254::Bn254;

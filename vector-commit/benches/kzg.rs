@@ -4,7 +4,7 @@ use sha2::Sha256;
 use vector_commit::{
     kzg::{kzg_point_generator::KZGRandomPointGenerator, *},
     lagrange_basis::LagrangeBasis,
-    VCUniversalParams, VectorCommitment,
+    HasPrecompute, VCUniversalParams, VectorCommitment,
 };
 
 use ark_bn254::Bn254;
