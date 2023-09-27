@@ -79,17 +79,10 @@ where
     T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq,
 {
     fn new_extension(stem: Key<N, K>, values: Vec<(K, T)>) -> Self {
-        //let mut vc_vec = vec![T::zero(); N]; //FIXME: This is failing bc N used to be for arity but now its key length
-        // Sparse implementation would let us avoid arity, but need to find out most efficient way for
-        // knowing if an index is already included, and where to do inserts. Is a Btree the only solution?
-        //values.into_iter().for_each(|v| vc_vec[v.0.into()] = v.1);
-
-        let map: HashMap<K, T> = values.into_iter().collect();
-
         Self::Extension {
             stem,
             commit: None,
-            leaves: map,
+            leaves: values.into_iter().collect(),
         }
     }
 
