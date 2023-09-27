@@ -1,92 +1,143 @@
+use num::{One, Zero};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt::{Debug, Display},
-    ops::Index,
+    fmt::Debug,
+    hash::Hash,
 };
 
-use num::Zero;
-use vector_commit::{VCCommitment, VCData, VectorCommitment};
+use vector_commit::{VCData, VectorCommitment};
 
-/// A Verkle Tree implementation, specifically using Ethereum's stem and extension model.
-/// There are two types of nodes in this model, although I have attempted to leave open easy addition for more types.
-/// - Inner nodes: Nodes whose children are either other inner nodes, or Extension nodes.
-/// - Extension nodes: Nodes who contain the actual values stored in the tree, as leaves.
+trait KeyMethods<const N: usize, UnitType> {
+    /// Returns the index of where two keys differ. `cur_depth` is used as a hint for more efficient
+    /// searching, and caller SHOULD assume that the keys are the same up to `cur_depth`
+    fn next_diff_depth(&self, other: &Self, cur_depth: usize) -> usize;
 
-// TODO: Generic underlying unit of keys, will allow packing units into memory
-trait Key {
-    // #[feature(generic_const_exprs)] would allow us to ensure the stem is N-1, but this is only available in nightly
-    type FullKey;
-    type Stem: Eq + Index<usize, Output = usize> + Debug;
-
-    /// Return the full key length
-    fn len() -> usize;
-
-    fn diff_depth(cur_depth: usize, first: &Self::Stem, other: &Self::Stem) -> usize;
-
-    /// Splits a full key into its stem and final unit
-    fn split_full(full: &Self::FullKey) -> (Self::Stem, usize);
+    /// Splits a key into its stem and final unit
+    fn split(self) -> ([UnitType; N], UnitType);
 }
 
-// N is the size of the key
-// T is the leaf value type (a leaf does not need to know its own key)
+/// A key represents how items are indexed inside of the verkle tree.
+/// `N` represents the length of the key (and therefore a stem is of length N-1)
+/// `T` represents the data type for each unit of the key, which must be able to accomodate the arity of the tree.
+type Key<const N: usize, T> = [T; N];
+
+impl<const N: usize, UnitType: Zero + Copy + PartialEq> KeyMethods<N, UnitType>
+    for Key<N, UnitType>
+{
+    fn next_diff_depth(&self, other: &Self, cur_depth: usize) -> usize {
+        let mut d: usize = cur_depth + 1;
+        while d < N {
+            if self[d] != other[d] {
+                break;
+            }
+            d += 1;
+        }
+        d
+    }
+
+    #[inline]
+    fn split(self) -> ([UnitType; N], UnitType) {
+        // TODO: Not too efficient
+        let unit = self[N - 1];
+        let stem = self;
+
+        (stem, unit)
+    }
+}
+
+/// The Ethereum Verkle tree implementation requires that all values (which are 256-bits) must be split into
+/// two 128-bit chunks. This is because many ECC orders (including the one Ethereum uses) are less than 256-bits.
+pub trait SplittableValue {
+    /// The type that is output from the split
+    type Output;
+
+    /// Split this type into a lower and upper half. Methodology is up to the implementor,
+    /// but conventionally this will simply be split by the lower and upper bits of the type
+    fn split(&self) -> (Self::Output, Self::Output);
+}
+
 #[derive(Clone)]
 enum Node<const N: usize, K, VC, T>
 where
-    K: Key,
     VC: VectorCommitment,
-    VC::Data: VCData<Item = T>,
 {
     Internal {
         commit: Option<VC::Commitment>,
-        //vc_data: VC::Data,
-        children: HashMap<usize, Node<N, K, VC, T>>,
+        children: HashMap<K, Node<N, K, VC, T>>,
     },
     Extension {
-        stem: K::Stem,
+        stem: Key<N, K>, // TODO: Each stem has an extra unit because we cannot do N-1
         commit: Option<VC::Commitment>,
-        vc_data: VC::Data,
+        leaves: HashMap<K, T>, // Sparse implementation...but at what cost :(
     },
 }
 
-// The VerkleTree will receive every node that is now dirty, so it can later dispatch proof generation.
-// If we want to parallelize proof generation, then need to keep track of the relation of nodes to one another, so different
-// branches of equal sizing can be distributed.
-// For non-parallel simpler implementation, we simply start from the largest keys (and therefore further down the tree).
-//type ChangeCallbackFn<const N: usize, VC, T> = fn(Vec<usize>, &mut Node<N,VC,T>);
-
 impl<const N: usize, K, VC, T> Node<N, K, VC, T>
 where
-    K: Key,
+    K: Eq + Hash + Into<usize> + Zero + Copy,
     VC: VectorCommitment,
-    VC::Data: VCData<Item = T>,
-    T: Zero + Clone + PartialEq,
+    T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq,
 {
-    fn new_extension(stem: K::Stem, values: Vec<(usize, T)>) -> Self {
-        let mut vc_vec = vec![T::zero(); N];
-        values.into_iter().for_each(|v| vc_vec[v.0] = v.1);
+    fn new_extension(stem: Key<N, K>, values: Vec<(K, T)>) -> Self {
+        //let mut vc_vec = vec![T::zero(); N]; //FIXME: This is failing bc N used to be for arity but now its key length
+        // Sparse implementation would let us avoid arity, but need to find out most efficient way for
+        // knowing if an index is already included, and where to do inserts. Is a Btree the only solution?
+        //values.into_iter().for_each(|v| vc_vec[v.0.into()] = v.1);
+
+        let map: HashMap<K, T> = values.into_iter().collect();
 
         Self::Extension {
             stem,
             commit: None,
-            vc_data: <VC::Data as VCData>::from_vec(vc_vec),
+            leaves: map,
         }
     }
 
-    fn new_internal(nodes: Vec<(usize, Self)>) -> Self {
+    fn new_internal(nodes: Vec<(K, Self)>) -> Self {
         Self::Internal {
             commit: None,
-            //vc_data: <VC::Data as VCData>::from_vec(vec![]),
             children: nodes.into_iter().map(|v| (v.0, v.1)).collect(),
         }
     }
 
-    fn insert_into_stem(&mut self, cur_depth: usize, stem: K::Stem, values: Vec<(usize, T)>) {
+    /// Get the extension node equal to this stem. If it does not exist, return None
+    fn get_stem(&self, stem: &Key<N, K>, mut cur_depth: usize) -> Option<&Self> {
+        match self {
+            Self::Extension {
+                stem: self_stem, ..
+            } => {
+                if stem == self_stem {
+                    Some(self)
+                } else {
+                    None
+                }
+            }
+            Self::Internal { children, .. } => match children.get(&stem[cur_depth]) {
+                Some(c) => {
+                    cur_depth += 1;
+                    c.get_stem(stem, cur_depth)
+                }
+                None => None,
+            },
+        }
+    }
+
+    /// Gets the value from an extension node
+    fn get_value(&self, unit: K) -> Option<&T> {
+        match self {
+            Self::Extension { leaves, .. } => leaves.get(&unit),
+            _ => panic!("Called get_value on non-extension node"),
+        }
+    }
+
+    /// Recursively insert the `values` into an extension node that has its stem equal to `stem`
+    /// This function will clear the stored commit of all touched nodes, as they are no longer valid
+    fn insert(&mut self, stem: Key<N, K>, values: Vec<(K, T)>, cur_depth: usize) {
         match self {
             Self::Extension {
                 stem: self_stem,
                 commit,
-                vc_data,
-                ..
+                leaves,
             } => {
                 // This function should only ever be called on an Extension node to insert values. I.e internal nodes
                 // will never call into here. Therefore self_stem should ALWAYS be equal to stem
@@ -95,27 +146,36 @@ where
                 }
                 *commit = None;
                 values.into_iter().for_each(|v| {
-                    //TODO: Add check for set_evaluation
-                    vc_data.set_evaluation(v.0, v.1);
+                    leaves.insert(v.0, v.1);
                 });
             }
+
+            // If we are an internal node, then we will be inserting the value into a child node
             Self::Internal {
                 commit, children, ..
             } => {
+                // Set commit to None as the commit is no longer accurate
                 *commit = None;
                 let k = stem[cur_depth];
                 let child = children.entry(k);
                 match child {
+                    // If we have a child that matches on the current unit of the key
                     Entry::Occupied(mut o) => {
                         let child_as_node = o.get_mut();
                         match child_as_node {
+                            // If the child is an extension node, then we will either insert into it if the stem's match,
+                            // or we must create a new branch resulting in a new inner node containing two extension nodes
                             Self::Extension {
                                 stem: child_stem, ..
                             } => {
-                                if &stem == child_stem || cur_depth == K::len() - 2 {
-                                    child_as_node.insert_into_stem(cur_depth + 1, stem, values);
+                                // The stems match, and therefore simply insert into the extension node
+                                if &stem == child_stem || cur_depth == N - 2 {
+                                    child_as_node.insert(stem, values, cur_depth + 1);
+
+                                // The stems differ, so a new inner node is created with the children hashmap key
+                                // equal to the differing unit
                                 } else {
-                                    let depth = K::diff_depth(cur_depth, child_stem, &stem);
+                                    let depth = child_stem.next_diff_depth(&stem, cur_depth);
                                     let nodes = vec![
                                         (stem[depth], Self::new_extension(stem, values)),
                                         (child_stem[depth], o.remove()),
@@ -126,7 +186,7 @@ where
                                 }
                             }
                             Self::Internal { .. } => {
-                                child_as_node.insert_into_stem(cur_depth + 1, stem, values);
+                                child_as_node.insert(stem, values, cur_depth + 1);
                             }
                         }
                     }
@@ -137,97 +197,28 @@ where
             }
         }
     }
-
-    fn get_stem(&self, mut cur_depth: usize, stem: K::Stem) -> Option<&Self> {
-        match self {
-            Self::Extension {
-                stem: self_stem, ..
-            } => {
-                if &stem == self_stem {
-                    Some(self)
-                } else {
-                    None
-                }
-            }
-            Self::Internal {
-                commit, children, ..
-            } => match children.get(&stem[cur_depth]) {
-                Some(c) => {
-                    cur_depth += 1;
-                    c.get_stem(cur_depth, stem)
-                }
-                None => None,
-            },
-        }
-    }
-
-    fn get_value(&self, index: usize) -> Option<&T> {
-        match self {
-            Self::Extension { vc_data, .. } => vc_data.get(index),
-            _ => panic!("Called get_value on non-extension node"),
-        }
-    }
-
-    // TODO: For simplicity, right now prepared_data is created everytime a node does not have a cached commit (aka is new or dirty)
-    //      Eventually should store this value, and explore only parents storing a node's commitment as its prepared data and storing a dirty flag
-    fn gen_commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
-        match self {
-            Self::Extension {
-                stem,
-                commit,
-                vc_data,
-            } => {
-                if commit.is_some() {
-                    return Ok(&commit.as_ref().unwrap());
-                }
-
-                let c = VC::commit(crs, vc_data)?;
-                *commit = Some(c);
-
-                Ok(commit.as_ref().unwrap())
-            }
-            Self::Internal { commit, children } => {
-                if commit.is_some() {
-                    return Ok(commit.as_ref().unwrap());
-                }
-
-                let mut vc_vec = vec![T::zero(); N];
-                for (k, child) in children.iter_mut() {
-                    let cc = child.gen_commitment(crs)?;
-                    vc_vec[*k] = cc.to_data_item();
-                }
-
-                let vc_data = <VC::Data as VCData>::from_vec(vc_vec);
-                let c = VC::commit(crs, &vc_data)?;
-                *commit = Some(c);
-
-                Ok(commit.as_ref().unwrap())
-            }
-        }
-    }
 }
 
 impl<const N: usize, K, VC, T> Debug for Node<N, K, VC, T>
 where
-    K: Key,
+    K: Debug,
     VC: VectorCommitment,
     VC::Commitment: Debug,
-    VC::Data: VCData<Item = T>,
-    T: Display + Zero + PartialEq,
+    T: Debug + Zero + PartialEq,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Extension {
                 stem,
                 commit,
-                vc_data,
+                leaves,
             } => {
                 f.write_fmt(format_args!("Extension ({:?}) {{\n", stem))?;
                 f.write_fmt(format_args!("\tCommit: {:?}\n", commit))?;
                 f.write_fmt(format_args!("\tChildren: {{\n"))?;
-                for (i, c) in vc_data.get_all() {
-                    if *c != T::zero() {
-                        f.write_fmt(format_args!("({},{})\n", i, c))?;
+                for (i, v) in leaves.iter() {
+                    if *v != T::zero() {
+                        f.write_fmt(format_args!("({:?},{:?})\n", i, v))?;
                     }
                 }
                 f.write_str("\t}")
@@ -245,117 +236,143 @@ where
     }
 }
 
-#[derive(Debug)]
-struct VerkleTree<const N: usize, K, VC, T>
+/// A Verkle Tree implements convience functions that operate on a single root `Node`.
+pub struct VerkleTree<const N: usize, K, VC, T>
 where
-    K: Key,
+    K: Eq + Hash,
     VC: VectorCommitment,
-    VC::Commitment: Debug,
-    VC::Data: VCData<Item = T>,
-    T: Zero + Clone + PartialEq + Display,
+    T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq + Debug,
 {
     root: Node<N, K, VC, T>,
 }
 
 impl<const N: usize, K, VC, T> VerkleTree<N, K, VC, T>
 where
-    K: Key,
+    K: Eq + Hash + Into<usize> + Zero + Copy,
     VC: VectorCommitment,
-    VC::Commitment: Debug,
-    VC::Data: VCData<Item = T>,
-    T: Zero + Clone + PartialEq + Display,
+    T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq + Debug,
 {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             root: Node::new_internal(vec![]),
         }
     }
 
-    fn insert_single(&mut self, key: K::FullKey, value: T) {
-        let (stem, unit) = K::split_full(&key);
-        self.root.insert_into_stem(0, stem, vec![(unit, value)]);
+    pub fn insert_single(&mut self, key: Key<N, K>, value: T) {
+        let (stem, unit) = key.split();
+        self.root.insert(stem, vec![(unit, value)], 0);
     }
 
-    fn get_single(&self, key: &K::FullKey) -> Option<&T> {
-        let (stem, unit) = K::split_full(&key);
-        match self.root.get_stem(0, stem) {
+    pub fn get_single(&self, key: &Key<N, K>) -> Option<&T> {
+        let (stem, unit) = key.split();
+        match self.root.get_stem(&stem, 0) {
             Some(stem) => stem.get_value(unit),
             None => None,
         }
-    }
-
-    fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
-        self.root.gen_commitment(crs)
-    }
-}
-
-#[derive(PartialEq, Debug, Clone)]
-struct VanillaKey<const F: usize, const S: usize>;
-impl<const F: usize, const S: usize> Key for VanillaKey<F, S> {
-    type FullKey = [usize; F];
-    type Stem = [usize; S];
-
-    fn len() -> usize {
-        F
-    }
-
-    fn diff_depth(cur_depth: usize, first: &Self::Stem, other: &Self::Stem) -> usize {
-        let mut d: usize = cur_depth + 1;
-        while d < S {
-            if first[d] != other[d] {
-                break;
-            }
-            d += 1;
-        }
-        d
-    }
-
-    fn split_full(full: &Self::FullKey) -> (Self::Stem, usize) {
-        //full[0..S].try_into().unwrap()
-        let (stem, unit) = full.split_at(S);
-        (stem.try_into().unwrap(), unit[0])
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use ark_ec::pairing::Pairing;
     use ark_ff::field_hashers::DefaultFieldHasher;
     use ark_poly::GeneralEvaluationDomain;
-    use rand::{seq::SliceRandom, Rng};
+    use rand::{seq::SliceRandom, Fill, Rng};
     use sha2::Sha256;
+    use std::ops::Add;
 
-    use super::*;
     use ark_bn254::Bn254;
     use vector_commit::kzg::{kzg_point_generator::KZGRandomPointGenerator, KZG};
 
     const KEY_LEN: usize = 3;
-    const ARITY: usize = 10;
-    type TestKey = VanillaKey<KEY_LEN, { KEY_LEN - 1 }>;
-    type TestFullKey = <TestKey as Key>::FullKey;
+    type KEY_DATA_TYPE = u8;
+    type KEYT = Key<KEY_LEN, KEY_DATA_TYPE>;
 
     type F = <Bn254 as Pairing>::ScalarField;
     type G1 = <Bn254 as Pairing>::G1;
     type Hasher = DefaultFieldHasher<Sha256>;
 
+    #[derive(Debug, Clone, PartialEq)]
+    struct U256([u8; 32]);
     type KZGT = KZG<Bn254, Hasher, GeneralEvaluationDomain<F>>;
-    type TestTree = VerkleTree<ARITY, TestKey, KZGT, F>;
+    type TestTree = VerkleTree<KEY_LEN, KEY_DATA_TYPE, KZGT, U256>;
 
-    fn random_key(arity: usize, prefix: Option<&<TestKey as Key>::Stem>) -> TestFullKey {
+    impl SplittableValue for U256 {
+        type Output = F;
+        fn split(&self) -> (Self::Output, Self::Output) {
+            (F::zero(), F::zero())
+        }
+    }
+
+    impl Zero for U256 {
+        fn zero() -> Self {
+            U256([0; 32])
+        }
+
+        fn is_zero(&self) -> bool {
+            self == &Self::zero()
+        }
+
+        fn set_zero(&mut self) {
+            for i in 0..32 {
+                self.0[i] = 0;
+            }
+        }
+    }
+
+    impl Add<Self> for U256 {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output {
+            let mut res = [0; 32];
+            for i in 0..32 {
+                res[i] = self.0[i] + rhs.0[i];
+            }
+
+            U256(res)
+        }
+    }
+
+    impl Fill for U256 {
+        fn try_fill<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), rand::Error> {
+            self.0.try_fill(rng)
+        }
+    }
+
+    fn random_key(arity: KEY_DATA_TYPE, prefix: Option<&KEYT>) -> Key<KEY_LEN, KEY_DATA_TYPE> {
         let mut rng = rand::thread_rng();
         let mut res = [0; KEY_LEN];
         let mut p_size = 0;
         if let Some(p) = prefix {
             p_size = p.len();
-            res[0..KEY_LEN - 1].copy_from_slice(p);
+            res[0..KEY_LEN].copy_from_slice(p);
         }
-        //let real_len = len - res.len();
 
         for i in p_size..KEY_LEN {
             res[i] = rng.gen_range(0..arity);
         }
 
         res
+    }
+
+    fn random_u256() -> U256 {
+        let mut res = U256::zero();
+        res.0.try_fill(&mut rand::thread_rng());
+        res
+    }
+
+    #[test]
+    fn test_insert_simple() {
+        let mut tree = TestTree::new();
+        let key = random_key(255, None);
+        let val = random_u256();
+
+        println!("Key: {:?}\nValue: {:?}", key, val);
+
+        tree.insert_single(key.clone(), val);
+        println!("{:?}", tree.root);
+        println!("{:?}", tree.get_single(&key));
     }
 
     #[test]
@@ -367,21 +384,21 @@ mod tests {
         let mut tree2 = TestTree::new();
 
         // 1/4 of keys will share a stem
-        let (stem, _) = TestKey::split_full(&random_key(ARITY, None));
-        let mut kvs: HashMap<TestFullKey, F> = (0..NUM_LEAVES / 4)
+        let (stem, _) = random_key(255, None).split();
+        let mut kvs: HashMap<KEYT, U256> = (0..NUM_LEAVES / 4)
             .map(|_| {
-                let key = random_key(ARITY, Some(&stem));
+                let key = random_key(255, Some(&stem));
 
-                (key.clone(), rng.gen())
+                (key.clone(), random_u256())
             })
             .collect();
 
         while kvs.len() < NUM_LEAVES {
-            let key = random_key(ARITY, None);
-            kvs.insert(key.clone(), rng.gen());
+            let key = random_key(255, None);
+            kvs.insert(key.clone(), random_u256());
         }
 
-        let keys: Vec<&TestFullKey> = kvs.keys().collect();
+        let keys: Vec<&KEYT> = kvs.keys().collect();
         let mut keys2 = keys.clone();
         keys2.shuffle(&mut rng);
 
@@ -394,7 +411,7 @@ mod tests {
 
         //assert!(tree1 == tree2);
 
-        for k in kvs.keys().collect::<Vec<&TestFullKey>>() {
+        for k in kvs.keys().collect::<Vec<&KEYT>>() {
             let get1 = tree1.get_single(k);
             let get2 = tree2.get_single(k);
 
@@ -408,29 +425,29 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut tree = TestTree::new();
 
-        let key = random_key(ARITY, None);
-        let val1: F = rng.gen();
-        let val2: F = rng.gen();
+        let key = random_key(255, None);
+        let val1 = random_u256();
+        let val2 = random_u256();
 
         tree.insert_single(key, val1);
-        tree.insert_single(key, val2);
+        tree.insert_single(key, val2.clone());
 
         assert!(tree.get_single(&key).unwrap() == &val2);
     }
 
-    #[test]
-    fn test_commitment() {
-        let mut rng = rand::thread_rng();
-        let mut tree: TestTree = TestTree::new();
-        let point_gen = KZGRandomPointGenerator::<G1>::default();
-        let crs = KZGT::setup(ARITY, &point_gen).unwrap();
+    //     #[test]
+    //     fn test_commitment() {
+    //         let mut rng = rand::thread_rng();
+    //         let mut tree: TestTree = TestTree::new();
+    //         let point_gen = KZGRandomPointGenerator::<G1>::default();
+    //         let crs = KZGT::setup(ARITY, &point_gen).unwrap();
 
-        let key = random_key(ARITY, None);
-        let val: F = rng.gen();
-        tree.insert_single(key, val);
+    //         let key = random_key(ARITY, None);
+    //         let val: F = rng.gen();
+    //         tree.insert_single(key, val);
 
-        println!("{:?}", tree.root);
-        let commit = tree.commitment(&crs);
-        println!("{:?}", commit);
-    }
+    //         println!("{:?}", tree.root);
+    //         let commit = tree.commitment(&crs);
+    //         println!("{:?}", commit);
+    //     }
 }
