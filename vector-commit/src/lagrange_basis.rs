@@ -171,6 +171,10 @@ impl<F: PrimeField, D: EvaluationDomain<F>> VCData for LagrangeBasis<F, D> {
     fn get_all(&self) -> Vec<(usize, &Self::Item)> {
         self.evaluations.evals.iter().enumerate().collect_vec()
     }
+
+    fn bytes_to_item(bytes: &[u8]) -> Self::Item {
+        F::from_le_bytes_mod_order(bytes)
+    }
 }
 
 impl<F: PrimeField, D: EvaluationDomain<F>> Index<usize> for LagrangeBasis<F, D> {

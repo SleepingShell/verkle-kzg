@@ -44,6 +44,8 @@ pub trait VCData: Index<usize> {
     fn get(&self, index: usize) -> Option<&Self::Item>;
 
     fn get_all(&self) -> Vec<(usize, &Self::Item)>;
+
+    fn bytes_to_item(bytes: &[u8]) -> Self::Item;
 }
 
 pub trait VCCommitment<F> {
