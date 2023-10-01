@@ -1,3 +1,4 @@
+use bytemuck::{bytes_of, Pod};
 use num::{One, Zero};
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -5,7 +6,7 @@ use std::{
     hash::Hash,
 };
 
-use vector_commit::{VCData, VectorCommitment};
+use vector_commit::{VCCommitment, VCData, VectorCommitment};
 
 trait KeyMethods<const N: usize, UnitType> {
     /// Returns the index of where two keys differ. `cur_depth` is used as a hint for more efficient
@@ -14,6 +15,8 @@ trait KeyMethods<const N: usize, UnitType> {
 
     /// Splits a key into its stem and final unit
     fn split(self) -> ([UnitType; N], UnitType);
+
+    fn to_bytes(&self) -> Vec<u8>;
 }
 
 /// A key represents how items are indexed inside of the verkle tree.
@@ -21,7 +24,7 @@ trait KeyMethods<const N: usize, UnitType> {
 /// `T` represents the data type for each unit of the key, which must be able to accomodate the arity of the tree.
 type Key<const N: usize, T> = [T; N];
 
-impl<const N: usize, UnitType: Zero + Copy + PartialEq> KeyMethods<N, UnitType>
+impl<const N: usize, UnitType: Zero + Copy + PartialEq + Pod> KeyMethods<N, UnitType>
     for Key<N, UnitType>
 {
     fn next_diff_depth(&self, other: &Self, cur_depth: usize) -> usize {
@@ -42,6 +45,10 @@ impl<const N: usize, UnitType: Zero + Copy + PartialEq> KeyMethods<N, UnitType>
         let stem = self;
 
         (stem, unit)
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        self.map(|i| bytes_of(&i).to_owned()).concat()
     }
 }
 
@@ -74,8 +81,9 @@ where
 
 impl<const N: usize, K, VC, T> Node<N, K, VC, T>
 where
-    K: Eq + Hash + Into<usize> + Zero + Copy,
+    K: Eq + Hash + Zero + Copy + Pod + Into<usize>,
     VC: VectorCommitment,
+    <VC::Data as VCData>::Item: Copy + One,
     T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq,
 {
     fn new_extension(stem: Key<N, K>, values: Vec<(K, T)>) -> Self {
@@ -190,6 +198,73 @@ where
             }
         }
     }
+
+    /// Generates a commitment recursively. If all of a Node's children have `Some` commitment,
+    /// then there is no need to recurse further.
+    fn gen_commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
+        match self {
+            Self::Extension {
+                stem,
+                commit,
+                leaves,
+            } => {
+                if commit.is_some() {
+                    return Ok(&commit.as_ref().unwrap());
+                }
+
+                let mut c1_values = [<VC::Data as VCData>::Item::zero(); N];
+                let mut c2_values = [<VC::Data as VCData>::Item::zero(); N];
+
+                for (&index, leaf) in leaves.iter() {
+                    let (low, high) = leaf.split();
+                    let index_low: usize = (2 * index.into()) % N;
+                    let index_high: usize = (2 * index.into() + 1) % N;
+
+                    if index.into() < (N / 2) {
+                        c1_values[index_low] = low;
+                        c1_values[index_high] = high;
+                    } else {
+                        c2_values[index_low] = low;
+                        c2_values[index_high] = high;
+                    }
+                }
+
+                let c1 = VC::commit(crs, &<VC::Data as VCData>::from_vec(c1_values.to_vec()))?;
+                let c2 = VC::commit(crs, &<VC::Data as VCData>::from_vec(c2_values.to_vec()))?;
+
+                let extension_data = vec![
+                    <VC::Data as VCData>::Item::one(),
+                    <VC::Data as VCData>::bytes_to_item(&stem.to_bytes()),
+                    c1.to_data_item(),
+                    c2.to_data_item(),
+                ];
+
+                let c = VC::commit(crs, &<VC::Data as VCData>::from_vec(extension_data))?;
+                *commit = Some(c);
+
+                Ok(commit.as_ref().unwrap())
+            }
+            Self::Internal { commit, children } => {
+                if commit.is_some() {
+                    return Ok(commit.as_ref().unwrap());
+                }
+
+                // FIXME FIXME THIS IS HARDCODED NEED TO FIX
+                let mut vc_vec = vec![<VC::Data as VCData>::Item::zero(); 256];
+                for (&k, child) in children.iter_mut() {
+                    let cc = child.gen_commitment(crs)?;
+                    vc_vec[k.into()] = cc.to_data_item();
+                    //vc_vec.insert(*k.into(), cc.to_data_item());
+                }
+
+                let vc_data = <VC::Data as VCData>::from_vec(vc_vec);
+                let c = VC::commit(crs, &vc_data)?;
+                *commit = Some(c);
+
+                Ok(commit.as_ref().unwrap())
+            }
+        }
+    }
 }
 
 impl<const N: usize, K, VC, T> Debug for Node<N, K, VC, T>
@@ -241,8 +316,9 @@ where
 
 impl<const N: usize, K, VC, T> VerkleTree<N, K, VC, T>
 where
-    K: Eq + Hash + Into<usize> + Zero + Copy,
+    K: Eq + Hash + Into<usize> + Zero + Copy + Pod + Into<usize>,
     VC: VectorCommitment,
+    <VC::Data as VCData>::Item: Copy + One,
     T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq + Debug,
 {
     pub fn new() -> Self {
@@ -262,6 +338,10 @@ where
             Some(stem) => stem.get_value(unit),
             None => None,
         }
+    }
+
+    pub fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
+        self.root.gen_commitment(crs)
     }
 }
 
@@ -356,19 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_simple() {
-        let mut tree = TestTree::new();
-        let key = random_key(255, None);
-        let val = random_u256();
-
-        println!("Key: {:?}\nValue: {:?}", key, val);
-
-        tree.insert_single(key.clone(), val);
-        println!("{:?}", tree.root);
-        println!("{:?}", tree.get_single(&key));
-    }
-
-    #[test]
     fn test_insert_get_leaves() {
         let NUM_LEAVES = 50;
         let mut rng = rand::thread_rng();
@@ -428,19 +495,19 @@ mod tests {
         assert!(tree.get_single(&key).unwrap() == &val2);
     }
 
-    //     #[test]
-    //     fn test_commitment() {
-    //         let mut rng = rand::thread_rng();
-    //         let mut tree: TestTree = TestTree::new();
-    //         let point_gen = KZGRandomPointGenerator::<G1>::default();
-    //         let crs = KZGT::setup(ARITY, &point_gen).unwrap();
+    #[test]
+    fn test_commitment() {
+        let mut rng = rand::thread_rng();
+        let mut tree: TestTree = TestTree::new();
+        let point_gen = KZGRandomPointGenerator::<G1>::default();
+        let crs = KZGT::setup(256, &point_gen).unwrap();
 
-    //         let key = random_key(ARITY, None);
-    //         let val: F = rng.gen();
-    //         tree.insert_single(key, val);
+        let key = random_key(255, None);
+        let val = random_u256();
+        tree.insert_single(key, val);
 
-    //         println!("{:?}", tree.root);
-    //         let commit = tree.commitment(&crs);
-    //         println!("{:?}", commit);
-    //     }
+        println!("{:?}", tree.root);
+        let commit = tree.commitment(&crs);
+        println!("{:?}", commit);
+    }
 }
