@@ -340,8 +340,8 @@ where
         }
     }
 
-    pub fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
-        self.root.gen_commitment(crs)
+    pub fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<VC::Commitment, VC::Error> {
+        self.root.gen_commitment(crs).map(|c| c.clone())
     }
 }
 
@@ -350,7 +350,7 @@ mod tests {
     use super::*;
 
     use ark_ec::pairing::Pairing;
-    use ark_ff::field_hashers::DefaultFieldHasher;
+    use ark_ff::{field_hashers::DefaultFieldHasher, PrimeField};
     use ark_poly::GeneralEvaluationDomain;
     use rand::{seq::SliceRandom, Fill, Rng};
     use sha2::Sha256;
@@ -375,7 +375,10 @@ mod tests {
     impl SplittableValue for U256 {
         type Output = F;
         fn split(&self) -> (Self::Output, Self::Output) {
-            (F::zero(), F::zero())
+            (
+                F::from_le_bytes_mod_order(&self.0[0..16]),
+                F::from_le_bytes_mod_order(&self.0[16..32]),
+            )
         }
     }
 
@@ -506,8 +509,8 @@ mod tests {
         let val = random_u256();
         tree.insert_single(key, val);
 
-        println!("{:?}", tree.root);
         let commit = tree.commitment(&crs);
+        println!("{:?}", tree.root);
         println!("{:?}", commit);
     }
 }
