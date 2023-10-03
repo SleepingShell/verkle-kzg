@@ -1,4 +1,4 @@
-//! Verkle Tree implementation over generic [https://docs.rs/vector-commit/latest/vector_commit/](vector commitment) schemes
+//! Verkle Tree implementation over generic [vector commitment](https://docs.rs/vector-commit/latest/vector_commit/) schemes
 //!
 //! A Verkle Tree is a trie data structure in which children are committed to, and inclusion proven, using the alforementioned
 //! vector commitment schemes.
