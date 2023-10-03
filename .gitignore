@@ -2,3 +2,4 @@
 /Cargo.lock
 INTERNAL.md
 sage.ipynb
+*.old
