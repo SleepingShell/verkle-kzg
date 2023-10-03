@@ -1,3 +1,17 @@
+//! Verkle Tree implementation over generic [https://docs.rs/vector-commit/latest/vector_commit/](vector commitment) schemes
+//!
+//! A Verkle Tree is a trie data structure in which children are committed to, and inclusion proven, using the alforementioned
+//! vector commitment schemes.
+//!
+//! This crate is geared towards the Ethereum style of Verkle Trees, but aims to be generic as reasonably possible.
+//! This style entails that there are two types of nodes: Internal and Extension.
+//! - Internal nodes: A typical tree node that stores pointers to its' children nodes
+//! - Extension nodes: The children of this node are the leaves, storing the actual data of the tree.
+//!
+//! Values in the tree are indexed by a `Key`. The implementation of the `Key` is an array of primitive integer types.
+//! A single element of this array is referred to as a **Unit**. A stem refers to all units of a key except its terminating one.
+//! This means that all leaves that share a stem will exist in the same Extension node.
+
 use bytemuck::{bytes_of, Pod};
 use num::{One, Zero};
 use std::{
@@ -8,6 +22,7 @@ use std::{
 
 use vector_commit::{VCCommitment, VCData, VectorCommitment};
 
+/// KeyMethods defines methods that a key must implement
 trait KeyMethods<const N: usize, UnitType> {
     /// Returns the index of where two keys differ. `cur_depth` is used as a hint for more efficient
     /// searching, and caller SHOULD assume that the keys are the same up to `cur_depth`
@@ -16,6 +31,7 @@ trait KeyMethods<const N: usize, UnitType> {
     /// Splits a key into its stem and final unit
     fn split(self) -> ([UnitType; N], UnitType);
 
+    /// Convert this key to a byte array
     fn to_bytes(&self) -> Vec<u8>;
 }
 
@@ -63,6 +79,21 @@ pub trait SplittableValue {
     fn split(&self) -> (Self::Output, Self::Output);
 }
 
+/// The Node provides the recursive structure of the Verkle Tree.
+///
+/// Both node types store their optional cached commitments.
+/// The below table provides some more information
+/// on the node types:
+/// | Type      | Description |
+/// |-----------|-------------|
+/// | Internal  | Stores children that are other Internal OR Extension nodes |
+/// | Extension | Stores the actual data of the tree. Additionally stores the stem that all leaves of this node share |
+///
+/// Methods are implemented for:
+/// - Storing and retrieving values
+/// - Grabbing commitments
+///
+/// All of these methods are called recursively on children when required
 #[derive(Clone)]
 enum Node<const N: usize, K, VC, T>
 where
@@ -123,7 +154,9 @@ where
         }
     }
 
-    /// Gets the value from an extension node
+    /// Gets the value from an extension node.
+    ///
+    /// ! Panics if called on an internal node
     fn get_value(&self, unit: K) -> Option<&T> {
         match self {
             Self::Extension { leaves, .. } => leaves.get(&unit),
@@ -132,7 +165,7 @@ where
     }
 
     /// Recursively insert the `values` into an extension node that has its stem equal to `stem`
-    /// This function will clear the stored commit of all touched nodes, as they are no longer valid
+    /// This function will **clear the stored commitment** of all touched nodes, as they are no longer valid
     fn insert(&mut self, stem: Key<N, K>, values: Vec<(K, T)>, cur_depth: usize) {
         match self {
             Self::Extension {
@@ -201,6 +234,17 @@ where
 
     /// Generates a commitment recursively. If all of a Node's children have `Some` commitment,
     /// then there is no need to recurse further.
+    ///
+    /// An Internal node will simply convert all children commitments to data items, and commit to that array
+    ///
+    /// The Extension node will generate commitments according to Ethereum's standard. This entails the following:
+    /// 1. All leaves are split into their upper and lower halves (from `SplittableValue`)
+    /// 2. The first half of leaves are committed to by `c1` with upper half preceding the lower half
+    ///     - E.g a leaf at index 1 will set the `VC::Data` array with [..., leaf_1_low, leaf_1_upper, ...]
+    /// 3. The upper half of leaves commit to `c2` using the same rules as above
+    /// 4. `c1` and `c2` are encoded as `VC::Data::Item`s
+    /// 5. The stem is encoded as a data item
+    /// 6. Commit to the 4 data item array: `[1, stem, c1, c2]`
     fn gen_commitment(&mut self, crs: &VC::UniversalParams) -> Result<&VC::Commitment, VC::Error> {
         match self {
             Self::Extension {
@@ -209,7 +253,7 @@ where
                 leaves,
             } => {
                 if commit.is_some() {
-                    return Ok(&commit.as_ref().unwrap());
+                    return Ok(commit.as_ref().unwrap());
                 }
 
                 let mut c1_values = [<VC::Data as VCData>::Item::zero(); N];
@@ -249,12 +293,11 @@ where
                     return Ok(commit.as_ref().unwrap());
                 }
 
-                // FIXME FIXME THIS IS HARDCODED NEED TO FIX
+                // HACK FIXME THIS IS HARDCODED NEED TO FIX
                 let mut vc_vec = vec![<VC::Data as VCData>::Item::zero(); 256];
                 for (&k, child) in children.iter_mut() {
                     let cc = child.gen_commitment(crs)?;
                     vc_vec[k.into()] = cc.to_data_item();
-                    //vc_vec.insert(*k.into(), cc.to_data_item());
                 }
 
                 let vc_data = <VC::Data as VCData>::from_vec(vc_vec);
@@ -342,6 +385,19 @@ where
 
     pub fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<VC::Commitment, VC::Error> {
         self.root.gen_commitment(crs).map(|c| c.clone())
+    }
+}
+
+// TODO: Maybe publish a crate with a macro to allow derive(Default)
+impl<const N: usize, K, VC, T> Default for VerkleTree<N, K, VC, T>
+where
+    K: Eq + Hash + Into<usize> + Zero + Copy + Pod + Into<usize>,
+    VC: VectorCommitment,
+    <VC::Data as VCData>::Item: Copy + One,
+    T: SplittableValue<Output = <VC::Data as VCData>::Item> + Zero + Clone + PartialEq + Debug,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -440,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_insert_get_leaves() {
-        let NUM_LEAVES = 50;
+        let num_leaves = 50;
         let mut rng = rand::thread_rng();
 
         let mut tree1 = TestTree::new();
@@ -448,7 +504,7 @@ mod tests {
 
         // 1/4 of keys will share a stem
         let (stem, _) = random_key(255, None).split();
-        let mut kvs: HashMap<KEYT, U256> = (0..NUM_LEAVES / 4)
+        let mut kvs: HashMap<KEYT, U256> = (0..num_leaves / 4)
             .map(|_| {
                 let key = random_key(255, Some(&stem));
 
@@ -456,7 +512,7 @@ mod tests {
             })
             .collect();
 
-        while kvs.len() < NUM_LEAVES {
+        while kvs.len() < num_leaves {
             let key = random_key(255, None);
             kvs.insert(key.clone(), random_u256());
         }
