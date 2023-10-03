@@ -9,6 +9,7 @@ edition = "2021"
 bytemuck = "1.14.0"
 num = "0.4.1"
 rand = "0.8.5"
+thiserror = "1.0.49"
 vector-commit = { path = "../vector-commit" }
 
 [dev-dependencies]

@@ -19,6 +19,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
 };
+use thiserror::Error;
 
 use vector_commit::{VCCommitment, VCData, VectorCommitment};
 
@@ -77,6 +78,12 @@ pub trait SplittableValue {
     /// Split this type into a lower and upper half. Methodology is up to the implementor,
     /// but conventionally this will simply be split by the lower and upper bits of the type
     fn split(&self) -> (Self::Output, Self::Output);
+}
+
+#[derive(Error, Debug)]
+enum VerkleError {
+    #[error("Invalid path requested")]
+    InvalidPath,
 }
 
 /// The Node provides the recursive structure of the Verkle Tree.
@@ -151,6 +158,40 @@ where
                 }
                 None => None,
             },
+        }
+    }
+
+    /// Recursively finds the path that must be taken in the tree to get the `stem`
+    ///
+    /// Each node in the path will store:
+    /// - The prefix of the key at the node
+    /// - The index of itself in regard to it's parent
+    /// - A reference to self
+    fn path_to_stem<'a>(
+        &'a self,
+        stem: &Key<N, K>,
+        path: &mut Vec<(Vec<K>, K, &'a Self)>,
+    ) -> Result<(), VerkleError> {
+        match self {
+            Self::Extension { .. } => Ok(()),
+
+            Self::Internal { children, .. } => {
+                // let depth = path.len();
+                // path.push((stem[0..depth].to_vec(), stem[depth], self));
+                // println!("huh {}", children.get(&stem[depth + 1]).is_some());
+                // if let Some(child) = children.get(&stem[depth + 1]) {
+                //     child.path_to_stem(stem, path)
+                // } else {
+                //     Err(VerkleError::InvalidPath)
+                // }
+                let depth = path.len();
+                if let Some(child) = children.get(&stem[depth]) {
+                    path.push((stem[0..depth + 1].to_vec(), stem[depth], self));
+                    child.path_to_stem(stem, path)
+                } else {
+                    Err(VerkleError::InvalidPath)
+                }
+            }
         }
     }
 
@@ -339,7 +380,7 @@ where
                 f.write_fmt(format_args!("\tCommit: {:?}\n", commit))?;
                 f.write_fmt(format_args!("\tChildren: {{\n"))?;
                 for c in children {
-                    f.write_fmt(format_args!("\t\t{:?}\n", c.1))?;
+                    f.write_fmt(format_args!("\t\t({:?}) {:?}\n", c.0, c.1))?;
                 }
                 f.write_str("\t}")
             }
@@ -385,6 +426,14 @@ where
 
     pub fn commitment(&mut self, crs: &VC::UniversalParams) -> Result<VC::Commitment, VC::Error> {
         self.root.gen_commitment(crs).map(|c| c.clone())
+    }
+
+    fn path_to_stem<'a>(
+        &'a self,
+        stem: &Key<N, K>,
+    ) -> Result<Vec<(Vec<K>, K, &'a Node<N, K, VC, T>)>, VerkleError> {
+        let mut res = vec![];
+        self.root.path_to_stem(stem, &mut res).map(move |_| res)
     }
 }
 
@@ -472,13 +521,13 @@ mod tests {
         }
     }
 
-    fn random_key(arity: KEY_DATA_TYPE, prefix: Option<&KEYT>) -> Key<KEY_LEN, KEY_DATA_TYPE> {
+    fn random_key(arity: KEY_DATA_TYPE, prefix: Option<&[KEY_DATA_TYPE]>) -> KEYT {
         let mut rng = rand::thread_rng();
         let mut res = [0; KEY_LEN];
         let mut p_size = 0;
         if let Some(p) = prefix {
             p_size = p.len();
-            res[0..KEY_LEN].copy_from_slice(p);
+            res[0..p_size].copy_from_slice(p);
         }
 
         for i in p_size..KEY_LEN {
@@ -541,7 +590,6 @@ mod tests {
 
     #[test]
     fn test_overwrite() {
-        let mut rng = rand::thread_rng();
         let mut tree = TestTree::new();
 
         let key = random_key(255, None);
@@ -556,7 +604,6 @@ mod tests {
 
     #[test]
     fn test_commitment() {
-        let mut rng = rand::thread_rng();
         let mut tree: TestTree = TestTree::new();
         let point_gen = KZGRandomPointGenerator::<G1>::default();
         let crs = KZGT::setup(256, &point_gen).unwrap();
@@ -566,7 +613,25 @@ mod tests {
         tree.insert_single(key, val);
 
         let commit = tree.commitment(&crs);
-        println!("{:?}", tree.root);
         println!("{:?}", commit);
+    }
+
+    #[test]
+    fn test_path_to_stem() {
+        let mut tree: TestTree = TestTree::new();
+        let point_gen = KZGRandomPointGenerator::<G1>::default();
+        let crs = KZGT::setup(256, &point_gen).unwrap();
+
+        let key = random_key(255, None);
+        let val = random_u256();
+        tree.insert_single(key, val);
+
+        tree.insert_single(random_key(255, Some(&[key[0]])), random_u256());
+
+        let path = tree.path_to_stem(&key);
+        for (i, p) in path.unwrap().iter().enumerate() {
+            assert!(p.0 == key[0..i + 1].to_vec());
+            assert!(p.1 == key[i]);
+        }
     }
 }
