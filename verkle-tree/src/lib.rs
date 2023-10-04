@@ -176,14 +176,6 @@ where
             Self::Extension { .. } => Ok(()),
 
             Self::Internal { children, .. } => {
-                // let depth = path.len();
-                // path.push((stem[0..depth].to_vec(), stem[depth], self));
-                // println!("huh {}", children.get(&stem[depth + 1]).is_some());
-                // if let Some(child) = children.get(&stem[depth + 1]) {
-                //     child.path_to_stem(stem, path)
-                // } else {
-                //     Err(VerkleError::InvalidPath)
-                // }
                 let depth = path.len();
                 if let Some(child) = children.get(&stem[depth]) {
                     path.push((stem[0..depth + 1].to_vec(), stem[depth], self));
