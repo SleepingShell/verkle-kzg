@@ -10,12 +10,15 @@ bytemuck = "1.14.0"
 num = "0.4.1"
 rand = "0.8.5"
 thiserror = "1.0.49"
+ark-ff = "0.4"
 vector-commit = { path = "../vector-commit" }
+ark-ec = "0.4.2"
+ark-poly = "0.4"
+ark-serialize = "0.4.2"
 
 [dev-dependencies]
 ark-bn254 = "0.4.0"
 ark-ec = "0.4.2"
-ark-ff = "0.4"
 ark-poly = "0.4"
 ethereum-types = "0.14.1"
 sha2 = "0.10.7"
