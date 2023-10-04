@@ -68,7 +68,7 @@ impl<const N: usize, G: Group, D: HashToField<G::ScalarField>> HasPrecompute<G::
 }
 
 /// A commitment to the set of data
-pub type IPACommitment<G: Group> = G;
+pub type IPACommitment<G> = G;
 
 pub struct IPACommitProof<G: Group> {
     l: Vec<G>,

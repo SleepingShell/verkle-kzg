@@ -19,7 +19,7 @@ use crate::{
     lagrange_basis::LagrangeBasis,
     transcript::Transcript,
     utils::{invert_domain_at, powers_of},
-    HasPrecompute, VCData, VCUniversalParams, VectorCommitment,
+    HasPrecompute, VCCommitment, VCData, VCUniversalParams, VectorCommitment,
 };
 
 #[derive(Clone)]
@@ -57,19 +57,42 @@ pub struct Multiproof<P, D> {
     d: D,
 }
 
+/// Vector Commitments used in Multiproofs must certain execute mathematical operations
+/// and other attributes.
+pub trait VCCommitmentMultiProof<F>:
+    VCCommitment<F>
+    + CanonicalSerialize
+    + Sub<Output = Self>
+    + Eq
+    + Hash
+    + Mul<F, Output = Self>
+    + Sum
+    + Copy
+    + Sync
+{
+}
+
+/// Blanket implementation of the `VCCommitmentMultiProof` trait for all `VCCommitment` that impelement
+/// the requried functionality
+impl<VCC, F> VCCommitmentMultiProof<F> for VCC where
+    VCC: VCCommitment<F>
+        + CanonicalSerialize
+        + Sub<Output = Self>
+        + Eq
+        + Hash
+        + Mul<F, Output = Self>
+        + Sum
+        + Copy
+        + Sync
+{
+}
+
 pub trait VectorCommitmentMultiproof<G, D>:
     VectorCommitment<Data = LagrangeBasis<G::ScalarField, D>>
 where
     G: Group,
     D: EvaluationDomain<G::ScalarField> + Sync + Send,
-    <Self as VectorCommitment>::Commitment: CanonicalSerialize
-        + Sub<Output = <Self as VectorCommitment>::Commitment>
-        + Eq
-        + Hash
-        + Mul<G::ScalarField, Output = Self::Commitment>
-        + Sum
-        + Copy
-        + Sync,
+    <Self as VectorCommitment>::Commitment: VCCommitmentMultiProof<G::ScalarField>,
     <Self as VectorCommitment>::UniversalParams: HasPrecompute<G::ScalarField> + Sync,
 {
     /// Create a multiproof that proves multiple datasets at (possibly) multiple different evaluation points
@@ -197,6 +220,7 @@ where
     G: CurveGroup,
     H: HashToField<G::ScalarField> + Sync,
     D: EvaluationDomain<G::ScalarField> + Sync + Send,
+    <Self as VectorCommitment>::Commitment: VCCommitmentMultiProof<G::ScalarField>,
 {
 }
 
@@ -205,6 +229,7 @@ where
     E: Pairing,
     H: HashToField<E::ScalarField> + Sync,
     D: EvaluationDomain<E::ScalarField> + Sync + Send,
+    <Self as VectorCommitment>::Commitment: VCCommitmentMultiProof<E::ScalarField>,
 {
 }
 
