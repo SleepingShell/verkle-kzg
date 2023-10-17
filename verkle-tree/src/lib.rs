@@ -196,7 +196,15 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct U256([u8; 32]);
     type KZGT = KZG<Bn254, Hasher, GeneralEvaluationDomain<F>>;
-    type TestTree = VerkleTree<KEY_LEN, KEY_DATA_TYPE, KZGT, U256>;
+
+    type TestTree = VerkleTree<
+        KEY_LEN,
+        KEY_DATA_TYPE,
+        KZGT,
+        U256,
+        PhantomData<G1>,
+        PhantomData<GeneralEvaluationDomain<F>>,
+    >;
 
     impl SplittableValue for U256 {
         type Output = F;
